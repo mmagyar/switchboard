@@ -13,8 +13,9 @@ A router that is simple to use, not overly complex but can do great things
 ## Usage
 
 ```typescript
-import { define, RouteHandlerDefiner } from "@router";
-import { z } from "zod";
+
+import { define, RouteHandlerDefiner, Router, serveHotBuns } from "switchboard";
+import z from "zod";
 
 export type PermissionsType = ("public" | "private")[];
 export type User = { name: string };
@@ -27,29 +28,41 @@ export const handle = RouteHandlerDefiner<User, PermissionsType>(
   async () => {
     return { name: "John" }; //Set the user, maybe get from jwt / db up to you
   },
-  (s, x) => { //How do you want to log output validation errors
+  (s, x) => {
+    //How do you want to log output validation errors
     console.warn("** OUTPUT VALIDATION FAILED **", s, " ** DATA ** ", x);
   },
 );
 
-
-const orderDef = def.get(
+const apiDefinition = def.get(
   "/order",
   [],
-  z.object({ fromSearchString: z.string().optional() }),
   z.object({ restaurents: z.array(z.string()) }),
+  z.object({ fromSearchString: z.string().optional() }),
 );
 
-export const showItems = handle(orderDef, async () => {
+export const apiHandler = handle(apiDefinition, async (x) => {
   return { restaurents: ["sdf"] };
 });
 
-const routes = [orderDef];
+const routes = [apiHandler];
 
-and than server the request, in you http request handler, however you want:
-const r = new Router();
-routes.map((x) => r.addRoute(x.method, x.path, x.handlerWrapped));
-res = await r.handleRequest(req)
+const router = new Router();
+routes.map((x) => router.addRoute(x.method, x.path, x.handlerWrapped));
+
+// and than server the request, in you http request handler, however you want:
+serveHotBuns(
+  {
+    port: 8891,
+    development: true,
+    hostname: "localhost",
+    https: "generate",
+  },
+  router,
+);
+
+//or, more barebones options
+res = await router.handleRequest(req)
 
 ```
 

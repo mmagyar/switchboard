@@ -2,6 +2,7 @@
   "name": "switchboard",
   "module": "index.ts",
   "type": "module",
+  "main": "./src/index.ts",
   "devDependencies": {
     "typescript": "^5.9.3",
     "@types/bun": "^1.2.20"

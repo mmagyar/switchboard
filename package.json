@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "module": "index.ts",
+  "module": "./src/index.ts",
   "type": "module",
   "main": "./src/index.ts",
   "devDependencies": {

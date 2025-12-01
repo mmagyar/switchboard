@@ -1,0 +1,59 @@
+{
+  "include": ["./src/**/*"],
+  "rootDir": "./src",
+  "outdir": "./dist",
+
+  "compilerOptions": {
+    // Enable latest features
+    "lib": ["ESNext", "DOM"],
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleDetection": "auto",
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "esModuleInterop": true,
+    "declaration": true,
+    //My opts
+    "noErrorTruncation": true,
+    "incremental": true,
+    // Bundler mode
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+
+    //Otherwise it fails with bun
+    "skipLibCheck": true,
+
+    // Some stricter flags (disabled by default)
+    "strict": true,
+    "alwaysStrict": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    "allowSyntheticDefaultImports": false,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noFallthroughCasesInSwitch": true,
+    "strictNullChecks": true,
+    "strictFunctionTypes": true,
+    "strictBindCallApply": true,
+    "strictPropertyInitialization": true,
+    "strictBuiltinIteratorReturn": true,
+    "forceConsistentCasingInFileNames": true,
+    "useUnknownInCatchVariables": true,
+
+    //This is just too much overhead for very little gain
+    "exactOptionalPropertyTypes": false,
+
+    /* Preact Config */
+    "jsxImportSource": "preact",
+    "baseUrl": ".",
+    "paths": {}
+  }
+}

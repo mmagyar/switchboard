@@ -1,0 +1,11 @@
+// Folder-specific settings
+//
+// For a full list of overridable settings, and general information on folder-specific settings,
+// see the documentation: https://zed.dev/docs/configuring-zed#settings-files
+{
+  "use_autoclose": false,
+  "soft_wrap": "editor_width",
+  "autosave": "on_focus_change",
+  "preferred_line_length": 100,
+  "buffer_font_features": { "calt": false }
+}

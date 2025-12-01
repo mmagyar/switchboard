@@ -1,0 +1,19 @@
+{
+  "name": "switchboard",
+  "module": "index.ts",
+  "type": "module",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "@types/bun": "^1.2.20"
+  },
+  "scripts": {
+    "check": "tsc --no-emit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "zod": "^4.1.13"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

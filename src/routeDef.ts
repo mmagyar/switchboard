@@ -35,6 +35,12 @@ type MaybeZodType = ZodType | undefined;
 type MaybeUrl<PATH extends string, T extends MaybeZodType = undefined> = T extends ZodType ? T : UrlParamsSchema<PATH>;
 export const define = <PERMISSION>() => {
   return {
+    /**
+     * @param path
+     * @param permissionsNeeded
+     * @param outputValidation
+     * @param paramsValidation
+     */
     get: <PATH extends string, PARAMS extends MaybeZodType = undefined, OUT extends ZodType = never>(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,

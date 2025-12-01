@@ -336,4 +336,33 @@ describe("can parse with dot notation", () => {
       arr: [{ name: "hello" }, { name: "world" }],
     } as any);
   });
+
+  test("work with union types", () => {
+    const listFieldTypes = z.enum(["current_job", "previous_job"]);
+
+    // String Array Operations
+    const allOfFilter = z
+      .object({
+        field: listFieldTypes,
+        all_of: z.array(z.string()),
+      })
+      .strict();
+
+    const notAllOfFilter = z
+      .object({
+        field: listFieldTypes,
+        not_all_of: z.array(z.string()),
+      })
+      .strict();
+
+    const filterItemSchema = allOfFilter.or(notAllOfFilter);
+    const all = z.object({ filters: z.array(filterItemSchema) });
+
+    const input = {
+      "filters.0.field": "current_job",
+      "filters.0.all_of.0": "METAL work",
+    };
+    const result = parseObjectFromForm(all, input);
+    expect(result).toEqual({ filters: [{ field: "current_job", all_of: ["METAL work"] }] });
+  });
 });

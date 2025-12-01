@@ -1,5 +1,5 @@
 import { merge, filter, keys } from "./util.ts";
-import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly, ZodType } from "zod";
+import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly, ZodType, ZodUnion } from "zod";
 //Unwrap all types that my wrap a value
 type ZodUnwrap<T> = T extends ZodReadonly<infer K> ? ZodUnwrap<K> : T extends ZodOptional<infer K> ? ZodUnwrap<K> : T;
 // : T extends ZodEffects<infer K>
@@ -24,9 +24,9 @@ const callForSubObjects = <Schema extends z.ZodType, T extends Record<Keys, V>, 
   callback: (schema: z.ZodType, obj: object) => Record<string, any> | undefined,
 ): Record<string, V> | undefined => {
   let out: Record<string, any> | undefined;
-  if (!("shape" in schemaIn)) return out;
+  if (!(schemaIn instanceof ZodObject)) return out;
 
-  const shape = schemaIn.shape as Record<string, z.ZodType>;
+  const shape = schemaIn.shape;
   const objectValidations = keys(filter(shape, (value) => isNestedObject(value)));
   for (const key of objectValidations) {
     const incoming = input[key as Keys];
@@ -98,7 +98,7 @@ export const parseNumberFromForm = <
       //TODO cast to any on return, the actual return type is not the best, deal with it later, does not really matter
       const values = input
         .map((item) => parseNumberFromForm(arrayItems, item))
-        .filter((value) => value !== undefined) as any;
+        .filter((value) => value !== undefined) as unknown as number[];
       if (values.length === 0) {
         return undefined;
       }
@@ -107,8 +107,8 @@ export const parseNumberFromForm = <
     return [];
   }
 
-  if (schema instanceof ZodType && "shape" in schema) {
-    const shape = schema.shape as Record<string, z.ZodType>;
+  if (schema instanceof ZodObject) {
+    const shape = schema.shape;
     const numberValidations = keys(filter(shape, (value) => isNestedNumber(value)));
 
     for (const key of numberValidations) {
@@ -165,8 +165,8 @@ export const parseBooleanFromForm = <
 
   //TODO this is probably not valid
 
-  if ("def" in schema && "shape" in schema.def) {
-    const shape = schema.def.shape as Record<string, z.ZodType>;
+  if (schema instanceof ZodObject) {
+    const shape = schema.shape;
     const booleanValidations = keys(filter(shape, (value) => isNestedBoolean(value)));
 
     for (const key of booleanValidations) {
@@ -180,21 +180,21 @@ export const parseBooleanFromForm = <
   return convertedValues;
 };
 
-export const parseObjectFromForm = <
-  Schema extends z.ZodType,
-  T extends Record<Keys, any>,
-  Keys extends keyof T = keyof T,
->(
-  schemaIn: Schema,
+export const parseObjectFromForm = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(
+  schemaIn: z.ZodType,
   input: T,
 ): Record<string, object | number | string> => {
   let results: Record<string, object> = {};
   const schema = zodUnwrap(schemaIn);
   const normalResults: Record<string, any> = {};
 
-  if ("shape" in schema) {
-    const shape = schema.shape as Record<string, z.ZodType>;
-    const uw = zodUnwrap(shape);
+  if (schemaIn instanceof ZodUnion) {
+    return schemaIn.options
+      .map((x) => parseObjectFromForm(x as z.ZodType, input))
+      .reduce((p, c) => merge(p, c, "nonEmpty", "nonEmpty"));
+  }
+  if (schema instanceof ZodObject) {
+    const shape = schema.shape;
     const deepKeys = keys(filter(shape, (value) => isNestedObject(value) || isNestedArray(value)));
     const normalKeys = keys(filter(shape, (value) => !isNestedObject(value) && !isNestedArray(value)));
 
@@ -209,18 +209,26 @@ export const parseObjectFromForm = <
             const part = parts[i]!;
             if (nextValidation instanceof ZodArray) {
               nextValidation = zodUnwrap(nextValidation?.def?.element) as ZodType; //TODO validate cast
-            } else if (nextValidation && "shape" in nextValidation) {
-              const nextPart = (nextValidation as ZodObject).shape[part];
+            } else if (nextValidation instanceof ZodObject) {
+              const nextPart = nextValidation.shape[part];
               if (!nextPart) {
                 nextValidation = z.any();
                 console.warn(`Missing validation for ${part}`);
               }
               nextValidation = zodUnwrap(nextPart);
+            } else if (nextValidation instanceof ZodUnion) {
+              // If it's a union, find the first possible result that has the necessary part name
+              // TODO this might no always be correct, but at this point it's kindof impossible to know
+              nextValidation = (
+                nextValidation.options.find((x) => x instanceof ZodObject && x.shape[part]) as ZodObject | undefined
+              )?.shape?.[part];
             } else {
-              nextValidation = zodUnwrap(uw[part])!;
+              nextValidation = zodUnwrap(shape[part])!;
             }
 
-            if (!nested[part]) nested[part] = nextValidation instanceof ZodArray ? [] : {};
+            if (!nested[part]) {
+              nested[part] = nextValidation instanceof ZodArray ? [] : {};
+            }
 
             if (parts.length - 1 === i) nested[part] = input[c];
             else nested = nested[part];

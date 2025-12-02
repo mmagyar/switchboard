@@ -1,56 +1,128 @@
-import { merge, filter, keys } from "./util.ts";
+import { merge } from "./util.ts";
 import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly, ZodType, ZodUnion } from "zod";
-//Unwrap all types that my wrap a value
+
+// TODO clean up the types in this file, remove the casts
+
 type ZodUnwrap<T> = T extends ZodReadonly<infer K> ? ZodUnwrap<K> : T extends ZodOptional<infer K> ? ZodUnwrap<K> : T;
-// : T extends ZodEffects<infer K>
-// ? ZodUnwrap<K>
-// : T;
+
 export const zodUnwrap = <T>(schema: T): ZodUnwrap<T> => {
-  // TODO as any is invalid but still need to fix it.
   if (schema instanceof ZodReadonly) return zodUnwrap(schema.def.innerType) as any;
-  // if (schema instanceof ZodEffects) return zodUnwrap((schema as any)._def);
   if (schema instanceof ZodOptional) return zodUnwrap(schema.def.innerType) as any;
   return schema as ZodUnwrap<T>;
 };
-const isNestedNumber = (value: ZodType) => zodUnwrap(value) instanceof ZodNumber;
 
-const isNestedBoolean = (value: ZodType) => zodUnwrap(value) instanceof ZodBoolean;
-const isNestedObject = (value: ZodType) => zodUnwrap(value) instanceof ZodObject;
-const isNestedArray = (value: ZodType) => zodUnwrap(value) instanceof ZodArray;
-
-const callForSubObjects = <Schema extends z.ZodType, T extends Record<Keys, V>, V, Keys extends keyof T = keyof T>(
+const callForSubObjects = <Schema extends z.ZodType>(
   schemaIn: Schema,
-  input: T,
-  callback: (schema: z.ZodType, obj: object) => Record<string, any> | undefined,
-): Record<string, V> | undefined => {
+  input: unknown,
+  callback: (schema: z.ZodType, obj: object) => Record<string, any> | undefined | unknown,
+): Record<string, unknown> | undefined => {
   let out: Record<string, any> | undefined;
-  if (!(schemaIn instanceof ZodObject)) return out;
+  if (schemaIn instanceof ZodUnion) {
+    return schemaIn.options
+      .map((x) => callForSubObjects(x as z.ZodType, input, callback))
+      .reduce((p, c) => {
+        if (c) {
+          if (typeof c === "object" && p && typeof p === "object") {
+            return merge(p, c, "nonEmpty", "nonEmpty");
+          } else {
+            return c;
+          }
+        }
+        return p;
+      });
+  }
+  if (!(schemaIn instanceof ZodObject)) return undefined;
+  if (!input || typeof input !== "object") return undefined;
 
   const shape = schemaIn.shape;
-  const objectValidations = keys(filter(shape, (value) => isNestedObject(value)));
-  for (const key of objectValidations) {
-    const incoming = input[key as Keys];
+
+  for (const key of Object.keys(input)) {
+    const incoming = (input as Record<string, unknown>)[key];
     const part = zodUnwrap(shape[key]);
-    if (part && part instanceof ZodObject && incoming && typeof incoming === "object") {
+
+    if (part instanceof ZodObject && incoming && typeof incoming === "object") {
       const res = callback(part, incoming);
+      if (!res) continue;
       if (!out) out = {};
       out[key] = typeof out[key] === "object" && res ? merge(out[key], res) : res;
     }
-  }
-  const arrayValidations = keys(filter(shape, (value) => isNestedArray(value)));
-  for (const key of arrayValidations) {
-    const incoming = input[key as Keys];
-    const part = zodUnwrap(shape[key]);
-    if (part && part instanceof ZodArray && incoming && Array.isArray(incoming)) {
+
+    if (part instanceof ZodUnion && incoming) {
       const res = callback(part, incoming);
-      if (res) {
-        if (!Array.isArray(res)) throw new Error(`Expected array but got ${typeof res}`);
-        if (!out) out = {};
-        out[key] = res;
+      if (!res) continue;
+      if (!out) out = {};
+      out[key] = typeof out[key] === "object" && res ? merge(out[key], res) : res;
+    }
+
+    if (part instanceof ZodArray && incoming && Array.isArray(incoming)) {
+      const res = callback(part, incoming);
+      if (!res) continue;
+      if (!Array.isArray(res)) throw new Error(`Expected array but got ${typeof res}`);
+      if (!out) out = {};
+      out[key] = res;
+    }
+  }
+
+  return out;
+};
+
+const unionHandler = <RETURN>(
+  schema: ZodUnion,
+  input: unknown,
+  parser: (z: ZodType, input: unknown) => RETURN,
+): RETURN => {
+  //This function is kinda fine,
+  // but due to the design there is an edge case
+  // when there is a union of a string and something that the parser can parse, and both would be valid, it will parse it, possibly making it it invalid.
+  // TODO make a test case to demondtrate that
+  return schema.options
+    .map((x) => parser(x as z.ZodType, input))
+    .filter((x) => x !== undefined)
+    .reduce((p: any, c: RETURN) => {
+      if (c) {
+        if (typeof c === "object" && p && typeof p === "object") {
+          return merge(p, c, "nonEmpty", "nonEmpty");
+        }
+        return c;
+      }
+      return p;
+    });
+};
+
+const arrayHandler = <RETURN>(
+  schema: ZodArray,
+  input: unknown,
+  parser: (z: ZodType, input: unknown) => RETURN,
+): RETURN[] | undefined => {
+  if (!Array.isArray(input)) return;
+
+  const arrayItems = zodUnwrap(schema.def.element);
+  const result = input.map((item) => parser(arrayItems as ZodType, item)).filter((x) => x !== undefined);
+  if (result.length === 0) return;
+
+  return result;
+};
+
+const objectHandler = <RETURN>(
+  schema: ZodObject,
+  input: unknown,
+  parser: (z: ZodType, input: unknown) => RETURN,
+): RETURN | undefined => {
+  let convertedValues: Record<string, RETURN | object> | undefined = undefined;
+  const shape = schema.shape;
+
+  for (const key of Object.keys(shape)) {
+    if (!(shape[key] instanceof z.ZodObject) && input && typeof input === "object") {
+      const output = parser(shape[key], (input as Record<string, any>)[key]);
+      if (typeof output !== "undefined") {
+        if (!convertedValues) convertedValues = {};
+        convertedValues[key] = output;
       }
     }
   }
-  return out;
+
+  const subObject = callForSubObjects(schema, input, parser);
+  return (convertedValues ? (subObject ? merge(convertedValues, subObject) : convertedValues) : subObject) as RETURN;
 };
 
 const parseNumber = (value: string) => {
@@ -70,62 +142,34 @@ const parseNumber = (value: string) => {
  *
  * This function does not run validation of any kind
  */
-export const parseNumberFromForm = <
-  Schema extends z.ZodType,
-  T extends Record<Keys, V>,
-  V,
-  Keys extends keyof T = keyof T,
->(
-  schemaIn: Schema,
-  input: T,
-): Record<string, V | number | number[]> | number[] | undefined => {
-  let convertedValues: Record<string, V | number | number[]> | undefined = undefined;
+export const parseNumberFromForm = (
+  schemaIn: z.ZodType,
+  input: unknown,
+): Record<string, any> | number[] | number | undefined => {
+  if (typeof input === "undefined") return undefined;
   const schema = zodUnwrap(schemaIn);
 
-  if (schema instanceof ZodArray) {
-    const arrayItems = zodUnwrap(schema.def.element);
-    if (!Array.isArray(input)) {
-      return undefined;
-    }
-    if (arrayItems instanceof ZodNumber) {
-      const values = input.map(parseNumber).filter((value) => value !== undefined);
-      if (values.length === 0) {
-        return undefined;
-      }
+  if (schema instanceof ZodUnion) {
+    return unionHandler(schema, input, parseNumberFromForm);
+  }
 
-      return values;
-    } else if (arrayItems instanceof ZodObject || arrayItems instanceof ZodArray) {
-      //TODO cast to any on return, the actual return type is not the best, deal with it later, does not really matter
-      const values = input
-        .map((item) => parseNumberFromForm(arrayItems, item))
-        .filter((value) => value !== undefined) as unknown as number[];
-      if (values.length === 0) {
-        return undefined;
-      }
-      return values;
-    }
-    return [];
+  if (typeof input === "string") {
+    if (schema instanceof ZodNumber) return parseNumber(input);
+    return undefined;
+  }
+
+  if (schema instanceof ZodArray) {
+    return arrayHandler(schema, input, parseNumberFromForm);
   }
 
   if (schema instanceof ZodObject) {
-    const shape = schema.shape;
-    const numberValidations = keys(filter(shape, (value) => isNestedNumber(value)));
-
-    for (const key of numberValidations) {
-      const currentValue = input[key as Keys];
-      const value = typeof currentValue === "string" ? parseNumber(currentValue) : undefined;
-      if (value) {
-        if (!convertedValues) convertedValues = {};
-        convertedValues[key] = value;
-      }
-    }
-    const subObject = callForSubObjects(schema, input, parseNumberFromForm) as Record<string, any>;
-    return convertedValues ? (subObject ? merge(convertedValues, subObject) : convertedValues) : subObject;
+    return objectHandler(schema, input, parseNumberFromForm);
   }
-  return convertedValues;
+
+  return undefined;
 };
 
-const parseBoolean = (value: string | undefined): boolean | undefined => {
+const parseBoolean = (value: string | undefined | unknown): boolean | undefined => {
   if (value === "true") return true;
   if (value === "false") return false;
   return undefined;
@@ -138,116 +182,69 @@ const parseBoolean = (value: string | undefined): boolean | undefined => {
  * all other values will not be converted.
  * This function does NOT run validation of any kind
  */
-export const parseBooleanFromForm = <
-  Schema extends z.ZodType,
-  T extends Record<Keys, any>,
-  Keys extends keyof T = keyof T,
->(
-  schemaIn: Schema,
-  input: T,
-): Record<string, any> | boolean[] | undefined => {
-  const convertedValues: Record<string, boolean | object> = {};
+export const parseBooleanFromForm = (
+  schemaIn: z.ZodType,
+  input: unknown,
+): Record<string, any> | boolean[] | boolean | undefined => {
   const schema = zodUnwrap(schemaIn);
+
+  if (schema instanceof ZodUnion) {
+    return unionHandler(schema, input, parseBooleanFromForm);
+  }
+
+  if (typeof input === "string") {
+    if (schema instanceof ZodBoolean) {
+      return parseBoolean(input);
+    }
+    return undefined;
+  }
 
   if (schema instanceof ZodArray) {
-    const arrayItems = schema.def.element; //zodUnwrap(schema._def.type);
-    if (!Array.isArray(input)) {
-      return [];
-    }
-    if (arrayItems instanceof ZodBoolean) {
-      return input.map(parseBoolean).filter((value) => value !== undefined);
-    } else if (arrayItems instanceof ZodObject || arrayItems instanceof ZodArray) {
-      //TODO cast to any on return, the actual return type is not the best, deal with it later, does not really matter
-      return input.map((item) => parseBooleanFromForm(arrayItems, item)) as any;
-    }
-    return [];
+    return arrayHandler(schema, input, parseBooleanFromForm);
   }
-
-  //TODO this is probably not valid
 
   if (schema instanceof ZodObject) {
-    const shape = schema.shape;
-    const booleanValidations = keys(filter(shape, (value) => isNestedBoolean(value)));
-
-    for (const key of booleanValidations) {
-      const incoming = parseBoolean(input[key as Keys]);
-      if (typeof incoming === "boolean") convertedValues[key] = incoming;
-    }
-
-    const subValues = callForSubObjects(schema, input, parseBooleanFromForm);
-    return convertedValues ? (subValues ? merge(convertedValues, subValues) : convertedValues) : subValues;
+    return objectHandler(schema, input, parseBooleanFromForm);
   }
-  return convertedValues;
+  return undefined;
 };
 
-export const parseObjectFromForm = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(
-  schemaIn: z.ZodType,
-  input: T,
+export const parseObjectFromForm = (
+  input: Record<string, string | string[]>,
 ): Record<string, object | number | string> => {
-  let results: Record<string, object> = {};
-  const schema = zodUnwrap(schemaIn);
-  const normalResults: Record<string, any> = {};
+  let result = {};
 
-  if (schemaIn instanceof ZodUnion) {
-    return schemaIn.options
-      .map((x) => parseObjectFromForm(x as z.ZodType, input))
-      .reduce((p, c) => merge(p, c, "nonEmpty", "nonEmpty"));
+  for (const inputKey of Object.keys(input)) {
+    result = merge(result, parseFieldName(inputKey, input[inputKey]));
   }
-  if (schema instanceof ZodObject) {
-    const shape = schema.shape;
-    const deepKeys = keys(filter(shape, (value) => isNestedObject(value) || isNestedArray(value)));
-    const normalKeys = keys(filter(shape, (value) => !isNestedObject(value) && !isNestedArray(value)));
-
-    const processKey = (key: string) => {
-      const matching = keys(input).filter((keyInput) => String(keyInput).startsWith(key + "."));
-      const reduced = matching.reduce(
-        (p, c) => {
-          const parts = String(c).split(".");
-          let nested = p as Record<string, any>;
-          let nextValidation: z.ZodType | undefined;
-          for (let i = 0; i < parts.length; i++) {
-            const part = parts[i]!;
-            if (nextValidation instanceof ZodArray) {
-              nextValidation = zodUnwrap(nextValidation?.def?.element) as ZodType; //TODO validate cast
-            } else if (nextValidation instanceof ZodObject) {
-              const nextPart = nextValidation.shape[part];
-              if (!nextPart) {
-                nextValidation = z.any();
-                console.warn(`Missing validation for ${part}`);
-              }
-              nextValidation = zodUnwrap(nextPart);
-            } else if (nextValidation instanceof ZodUnion) {
-              // If it's a union, find the first possible result that has the necessary part name
-              // TODO this might no always be correct, but at this point it's kindof impossible to know
-              nextValidation = (
-                nextValidation.options.find((x) => x instanceof ZodObject && x.shape[part]) as ZodObject | undefined
-              )?.shape?.[part];
-            } else {
-              nextValidation = zodUnwrap(shape[part])!;
-            }
-
-            if (!nested[part]) {
-              nested[part] = nextValidation instanceof ZodArray ? [] : {};
-            }
-
-            if (parts.length - 1 === i) nested[part] = input[c];
-            else nested = nested[part];
-          }
-          return p;
-        },
-        {} as Record<string, any>,
-      );
-
-      results = merge(results, reduced);
-    };
-
-    for (const key of normalKeys) {
-      normalResults[key] = (input as any)[key as any] as any;
-    }
-    for (const key of deepKeys) {
-      processKey(key);
-    }
-  }
-  const mregeResult = merge(normalResults, results);
-  return mregeResult;
+  return result;
 };
+
+export const parseFieldName = (fieldName: string, fieldValue?: string | string[]): object => {
+  const parts = fieldName.split(".");
+  const result: any = {};
+  let current = result;
+  for (let i = 0; i < parts.length; i++) {
+    current[parts[i]!] = isNumeric(parts[i + 1]) ? [] : {};
+
+    if (!parts[i + 1]) {
+      current[parts[i]!] = fieldValue;
+      return result;
+    }
+    current = current[parts[i]!];
+  }
+
+  return result;
+};
+
+function isNumeric(str?: string): boolean {
+  if (!str) return false;
+  for (let i = 0; i < str.length; i++) {
+    const code = str.charCodeAt(i);
+    // Checks if ascii code is below 48 ('0') or above 57 ('9')
+    if (code < 48 || code > 57) {
+      return false;
+    }
+  }
+  return true;
+}

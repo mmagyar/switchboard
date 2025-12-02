@@ -176,20 +176,27 @@ export const wrapHandler = <
       };
 
       //Parse back objects
-      const parsedObjectDepth = merge(fromUrl, parseObjectFromForm(paramsValidation, fromUrl));
-
+      const parsedObjectDepth = merge(fromUrl, parseObjectFromForm(fromUrl));
       //Make sure numbers are actually treated as numbers, boolean, so we can use proper zod schema
+      let parsedNumbersOnly = parseNumberFromForm(paramsValidation, parsedObjectDepth);
+      if (typeof parsedNumbersOnly !== "object") {
+        // It should not really happen unless the value is undefined
+        // Here to please the typescript complier
+        parsedNumbersOnly = undefined;
+      }
+
       //TODO this nonEmpty does not work for undefined objects
-      const parsedNumbers = merge(
-        parsedObjectDepth,
-        parseNumberFromForm(paramsValidation, parsedObjectDepth),
-        "nonEmpty",
-      );
-      const parsedBooleansAndNumbers = merge(
-        parsedNumbers,
-        parseBooleanFromForm(paramsValidation, parsedNumbers),
-        "nonEmpty",
-      );
+      // (??? What does this mean, i don't even know anymore)
+      const parsedNumbers = merge(parsedObjectDepth, parsedNumbersOnly, "nonEmpty");
+
+      let parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);
+      if (typeof parsedBooleans !== "object") {
+        // It should not really happen unless the value is undefined
+        // Here to please the typescript complier
+        parsedBooleans = undefined;
+      }
+
+      const parsedBooleansAndNumbers = merge(parsedNumbers, parsedBooleans, "nonEmpty");
       // This will throw a validation error we are not matching schema
       const queryParams = paramsValidation.safeParse(parsedBooleansAndNumbers);
       if (!queryParams.success) {

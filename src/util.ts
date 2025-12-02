@@ -10,10 +10,7 @@ export const forEach = <T extends Partial<Record<Keys, any>>, Keys extends keyof
   }
 };
 
-export const forEachFilterUndefined = <
-  T extends Partial<Record<Keys, any>>,
-  Keys extends keyof T = keyof T,
->(
+export const forEachFilterUndefined = <T extends Partial<Record<Keys, any>>, Keys extends keyof T = keyof T>(
   obj: T,
   callback: (value: Exclude<T[keyof T], undefined>, key: Keys, index: number) => void,
 ): void => {
@@ -29,12 +26,7 @@ export const forEachFilterUndefined = <
 
 export const count = <T>(obj: { [s: string]: T }): number => Object.keys(obj).length;
 
-export const map = <
-  T extends Record<Keys, any>,
-  U,
-  Keys extends keyof T = keyof T,
-  FILTER extends boolean = false,
->(
+export const map = <T extends Record<Keys, any>, U, Keys extends keyof T = keyof T, FILTER extends boolean = false>(
   obj: T,
   fn: (value: T[keyof T], key: keyof T) => U,
   filterUndefinedOutput: FILTER = false as FILTER,
@@ -46,9 +38,7 @@ export const map = <
       newObj[key as unknown as Keys] = newValue;
     }
   }
-  return newObj as FILTER extends false
-    ? Record<Keys, U>
-    : Partial<Record<Keys, ExcludeUndefined<U>>>;
+  return newObj as FILTER extends false ? Record<Keys, U> : Partial<Record<Keys, ExcludeUndefined<U>>>;
 };
 
 export const filter = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(
@@ -67,8 +57,7 @@ export const filter = <T extends Record<Keys, any>, Keys extends keyof T = keyof
 export const values = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(obj: T) =>
   Object.values(obj) as T[keyof T][];
 
-export const keys = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(obj: T) =>
-  Object.keys(obj) as Keys[];
+export const keys = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(obj: T) => Object.keys(obj) as Keys[];
 
 // export const entries = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(obj: T) =>
 //   Object.entries(obj) as [Keys, T[Keys]][];
@@ -80,10 +69,7 @@ export const entriesWithUndefiend = <T extends object>(obj: T) => {
  * Returns all entries typed correctly, without undefined values
  **/
 export const entries = <T extends object>(obj: T) => {
-  return Object.entries(obj).filter(([, value]) => value !== undefined) as [
-    keyof T,
-    Exclude<T[keyof T], undefined>,
-  ][];
+  return Object.entries(obj).filter(([, value]) => value !== undefined) as [keyof T, Exclude<T[keyof T], undefined>][];
   // .map(([key, value]) => [key as keyof T, value as Exclude<T[keyof T], undefined>]) as [
   // keyof T,
   // Exclude<T[keyof T], undefined>,
@@ -193,14 +179,14 @@ type DeepMerge<T, U> = T extends object
   : U;
 
 export function merge<T extends object, U extends object>(
-  base: T | undefined,
-  override: U | undefined,
+  base: T | undefined | null,
+  override: U | undefined | null,
   //If nonEmpty is set, undefined will not override set object
   strategy: "merge" | "nonEmpty" = "merge",
   //merge will merge arrays in place, ie, merge index 0 from base to index 0 of override, as if it was an object, but keep array type
   arrayStrategy: "concat" | "nonEmpty" | "merge" | "override" = "merge",
 ): DeepMerge<T, U> {
-  if (base === undefined || override === undefined) {
+  if (!base || !override) {
     return (override ?? base) as DeepMerge<T, U>;
   }
 
@@ -238,16 +224,10 @@ export function merge<T extends object, U extends object>(
       const overrideHasKey = Object.hasOwn(override, overrideKey);
 
       if ((isObject(override[overrideKey]) || Array.isArray(override[overrideKey])) && baseHasKey) {
-        output[overrideKey] = merge(
-          base[baseKey] as object,
-          override[overrideKey] as object,
-          strategy,
-          arrayStrategy,
-        );
+        output[overrideKey] = merge(base[baseKey] as object, override[overrideKey] as object, strategy, arrayStrategy);
       } else {
         if (strategy === "nonEmpty") {
-          output[overrideKey] =
-            override[overrideKey] === undefined ? base[baseKey] : override[overrideKey];
+          output[overrideKey] = override[overrideKey] === undefined ? base[baseKey] : override[overrideKey];
         }
         //Need to check if the object has the key, so we only override with undefined if it is actaully defined as undefined
         else if (strategy === "merge") {
@@ -258,16 +238,12 @@ export function merge<T extends object, U extends object>(
       }
     });
   } else {
-    throw new Error(
-      "NOT MERGING ANYTHING, this should not happen: " +
-        JSON.stringify({ base, override }, null, 2),
-    );
+    throw new Error("NOT MERGING ANYTHING, this should not happen: " + JSON.stringify({ base, override }, null, 2));
   }
   return output;
 }
 
-export const promiseTimeout = <T>(time: number): Promise<T> =>
-  new Promise<T>((resolve) => setTimeout(resolve, time));
+export const promiseTimeout = <T>(time: number): Promise<T> => new Promise<T>((resolve) => setTimeout(resolve, time));
 
 export const promiseDelay =
   <T>(time: number): ((result: T) => Promise<T>) =>

@@ -140,6 +140,15 @@ describe("can parse strings as booleans when declared in schema", () => {
     const result = parseBooleanFromForm(schema, input);
     expect(result).toEqual({ boolean: true });
   });
+  test("can parse a boolean form union type", () => {
+    const schema = z.object({
+      boolean: z.boolean().or(z.number()),
+    });
+    const input = { boolean: "true" };
+    const result = parseBooleanFromForm(schema, input);
+    expect(result).toEqual({ boolean: true });
+  });
+
   test("can parse a boolean with a false value", () => {
     const schema = z.object({
       boolean: z.boolean(),
@@ -154,7 +163,7 @@ describe("can parse strings as booleans when declared in schema", () => {
     });
     const input = { boolean: "hello" };
     const result = parseBooleanFromForm(schema, input);
-    expect(result).toEqual({});
+    expect(result).toBeUndefined();
   });
   test("can parse boolean from a schema that is optional", () => {
     const schema = z
@@ -183,7 +192,7 @@ describe("can parse strings as booleans when declared in schema", () => {
     });
     const input = { array: [1, 2] };
     const result = parseBooleanFromForm(schema, input);
-    expect(result).toEqual({ array: [] });
+    expect(result).toBeUndefined();
   });
 
   test("arrays only contain parsed if parsing", () => {
@@ -214,39 +223,25 @@ describe("can parse strings as booleans when declared in schema", () => {
 
 describe("can parse with dot notation", () => {
   test("can parse object with dot notation", () => {
-    const schema = z.object({
-      hey: z.string(),
-      object: z.object({
-        inside: z.object({
-          str: z.string(),
-        }),
-      }),
-    });
     const input = { "object.inside.str": "trueX", hey: "hello" };
-    const result = parseObjectFromForm(schema, input);
+    const result = parseObjectFromForm(input);
     expect(result).toEqual({ hey: "hello", object: { inside: { str: "trueX" } } });
   });
 
   test("can parse array with dot notation", () => {
-    const schema = z.object({
-      array: z.array(z.string()),
-    });
     const input = { "array.0": "hello", "array.1": "world" };
-    const result = parseObjectFromForm(schema, input);
+    const result = parseObjectFromForm(input);
     expect(result).toEqual({ array: ["hello", "world"] });
   });
 
   test("can parse nested array with dot notation", () => {
-    const schema = z.object({
-      array: z.array(z.array(z.string())),
-    });
     const input = {
       "array.0.0": "hello",
       "array.0.1": "world",
       "array.1.0": "hi",
       "array.1.1": "there",
     };
-    const result = parseObjectFromForm(schema, input);
+    const result = parseObjectFromForm(input);
     expect(result).toEqual({
       array: [
         ["hello", "world"],
@@ -256,20 +251,11 @@ describe("can parse with dot notation", () => {
   });
 
   test("can parse object->array->object", () => {
-    const schema = z.object({
-      object: z.object({
-        array: z.array(
-          z.object({
-            str: z.string(),
-          }),
-        ),
-      }),
-    });
     const input = {
       "object.array.0.str": "hello",
       "object.array.1.str": "world",
     };
-    const result = parseObjectFromForm(schema, input);
+    const result = parseObjectFromForm(input);
     expect(result).toEqual({
       object: {
         array: [{ str: "hello" }, { str: "world" }],
@@ -277,22 +263,13 @@ describe("can parse with dot notation", () => {
     });
   });
   test("can parse object->array->object->array", () => {
-    const schema = z.object({
-      object: z.object({
-        ao: z.array(
-          z.object({
-            ai: z.array(z.string()),
-          }),
-        ),
-      }),
-    });
     const input = {
       "object.ao.0.ai.0": "hello",
       "object.ao.0.ai.1": "world",
       "object.ao.1.ai.0": "hi",
       "object.ao.1.ai.1": "there",
     };
-    const result = parseObjectFromForm(schema, input);
+    const result = parseObjectFromForm(input);
     expect(result).toEqual({
       object: {
         ao: [{ ai: ["hello", "world"] }, { ai: ["hi", "there"] }],
@@ -303,20 +280,26 @@ describe("can parse with dot notation", () => {
   test("can parse object->array->object->number", () => {
     //TODO make this just about the parseNumberFromForm
     const schema = z.object({
-      object: z.object({
-        array: z.array(
-          z.object({
-            num: z.number(),
-          }),
-        ),
-      }),
+      object: z
+        .object({
+          array: z.array(
+            z
+              .object({
+                num: z.number(),
+              })
+              .or(z.object({ anotherNume: z.number() })),
+          ),
+        })
+        .or(z.array(z.number())),
     });
     const input = {
       "object.array.0.num": "1",
       "object.array.1.num": "2",
     };
-    const result1 = parseObjectFromForm(schema, input);
-    const result = merge(result1, parseNumberFromForm(schema, result1), "nonEmpty");
+    const result1 = parseObjectFromForm(input);
+    const numbers = parseNumberFromForm(schema, result1);
+    if (!numbers || typeof numbers !== "object") throw "IT should have been an object";
+    const result = merge(result1, numbers, "nonEmpty");
     expect(result).toEqual({
       object: {
         array: [{ num: 1 }, { num: 2 }],
@@ -324,13 +307,12 @@ describe("can parse with dot notation", () => {
     });
   });
   test("dis specific case", () => {
-    const schema = z.object({ id: z.string(), arr: z.array(z.object({ name: z.string() })) });
     const input = {
       id: "1",
       "arr.0.name": "hello",
       "arr.1.name": "world",
     };
-    const result = parseObjectFromForm(schema, input);
+    const result = parseObjectFromForm(input);
     expect(result).toEqual({
       id: "1",
       arr: [{ name: "hello" }, { name: "world" }],
@@ -338,31 +320,11 @@ describe("can parse with dot notation", () => {
   });
 
   test("work with union types", () => {
-    const listFieldTypes = z.enum(["current_job", "previous_job"]);
-
-    // String Array Operations
-    const allOfFilter = z
-      .object({
-        field: listFieldTypes,
-        all_of: z.array(z.string()),
-      })
-      .strict();
-
-    const notAllOfFilter = z
-      .object({
-        field: listFieldTypes,
-        not_all_of: z.array(z.string()),
-      })
-      .strict();
-
-    const filterItemSchema = allOfFilter.or(notAllOfFilter);
-    const all = z.object({ filters: z.array(filterItemSchema) });
-
     const input = {
       "filters.0.field": "current_job",
       "filters.0.all_of.0": "METAL work",
     };
-    const result = parseObjectFromForm(all, input);
+    const result = parseObjectFromForm(input);
     expect(result).toEqual({ filters: [{ field: "current_job", all_of: ["METAL work"] }] });
   });
 });

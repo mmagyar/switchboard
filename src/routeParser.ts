@@ -18,18 +18,7 @@ const callForSubObjects = <Schema extends z.ZodType>(
 ): Record<string, unknown> | undefined => {
   let out: Record<string, any> | undefined;
   if (schemaIn instanceof ZodUnion) {
-    return schemaIn.options
-      .map((x) => callForSubObjects(x as z.ZodType, input, callback))
-      .reduce((p, c) => {
-        if (c) {
-          if (typeof c === "object" && p && typeof p === "object") {
-            return merge(p, c, "nonEmpty", "nonEmpty");
-          } else {
-            return c;
-          }
-        }
-        return p;
-      });
+    return unionHandler(schemaIn, input, (t, i) => callForSubObjects(t, i, callback));
   }
   if (!(schemaIn instanceof ZodObject)) return undefined;
   if (!input || typeof input !== "object") return undefined;
@@ -86,7 +75,7 @@ const unionHandler = <RETURN>(
         return c;
       }
       return p;
-    });
+    }, undefined);
 };
 
 const arrayHandler = <RETURN>(

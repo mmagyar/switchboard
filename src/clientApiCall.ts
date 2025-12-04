@@ -3,8 +3,8 @@ import type { HTTPMethods } from "./staticDefs.ts";
 import { type Route } from "./routeDef.ts";
 import { defToUrl } from "./urlUtils.ts";
 
-const config = {
-  reportApiUrl: "/",
+export const config = {
+  baseUrl: "/",
 };
 const getSessionTokens = () => {
   return { tokens: { access_token: "" } };
@@ -40,7 +40,7 @@ export const call = async <
     auth = { Authorization: settings.authTokenOverride };
   }
 
-  const response = await fetch(`${settings.baseUrlOverride ?? config.reportApiUrl}${fullPath}`, {
+  const response = await fetch(`${settings.baseUrlOverride ?? config.baseUrl}${fullPath}`, {
     method: settings?.methodOverride ?? route.method.toUpperCase(),
     headers: {
       ...auth,

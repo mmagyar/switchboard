@@ -3,9 +3,14 @@ import type { HTTPMethods } from "./staticDefs.ts";
 import { type Route } from "./routeDef.ts";
 import { defToUrl } from "./urlUtils.ts";
 
-export const callConfig = {
+const callConfig = {
   baseUrl: "/",
 };
+
+export const setBaseUrl = (baseUrl: string) => {
+  callConfig.baseUrl = baseUrl;
+};
+
 const getSessionTokens = () => {
   return { tokens: { access_token: "" } };
 };

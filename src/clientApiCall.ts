@@ -1,7 +1,7 @@
 import type { ZodType, z } from "zod";
 import type { HTTPMethods } from "./staticDefs.ts";
 import { type Route } from "./routeDef.ts";
-import { defToUrl } from "./urlUtils.ts";
+import { defToUrl as defToUrlOg } from "./urlUtils.ts";
 
 const callConfig = {
   baseUrl: "/",
@@ -14,6 +14,7 @@ export const setBaseUrl = (baseUrl: string) => {
 const getSessionTokens = () => {
   return { tokens: { access_token: "" } };
 };
+export const defToUrl = defToUrlOg;
 
 export const call = async <
   METHOD extends HTTPMethods,

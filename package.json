@@ -1,8 +1,6 @@
 {
   "name": "switchboard",
-  "module": "./src/index.ts",
   "type": "module",
-  "main": "./src/index.ts",
   "devDependencies": {
     "typescript": "^5.9.3",
     "@types/bun": "^1.2.20"
@@ -16,5 +14,9 @@
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
+  },
+  "exports": {
+    "./client": "./src/clientApiCall.ts",
+    "./server": "./src/index.ts"
   }
 }

@@ -16,7 +16,7 @@
     "typescript": "^5.0.0"
   },
   "exports": {
-    "./client": "./src/clientApiCall.ts",
+    "./client": "./src/clientExport.ts",
     "./server": "./src/index.ts"
   }
 }

@@ -95,6 +95,7 @@ const objectStringify = (
     return encodeKeyValue(`${String(parentKeys)}.${String(k)}`, v, urlSearch);
   });
 
+//TODO maybe empty array should be preserved? otherwise some schemas might behave wierd
 export const defToUrl = <PATH extends string, PARAMS extends ZodType>(
   def: Omit<RouteBase<PATH, unknown, PARAMS, ZodTypeAny>, "bodyValidation">,
   input: z.infer<PARAMS>,

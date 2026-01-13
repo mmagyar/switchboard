@@ -50,6 +50,7 @@ export const call = async <
     headers: {
       ...auth,
       "Content-Type": "application/json",
+      accept: "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
     credentials: settings.withCredentials ? "include" : undefined,

@@ -1,3 +1,4 @@
+import { extractParams } from "./urlUtils.ts";
 import { merge } from "./util.ts";
 import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly, ZodType, ZodUnion } from "zod";
 
@@ -237,3 +238,50 @@ function isNumeric(str?: string): boolean {
   }
   return true;
 }
+
+export const parseUrl = <PATH extends string, PARAMS extends z.ZodType>(
+  url: URL,
+  path: PATH,
+  paramsValidation: PARAMS,
+) => {
+  let searchParams: Record<string, string | string[]> = {};
+  for (const [key, value] of url.searchParams.entries()) {
+    if (searchParams[key] === undefined) {
+      searchParams[key] = value;
+    } else {
+      if (Array.isArray(searchParams[key])) {
+        searchParams[key].push(value);
+      } else {
+        searchParams[key] = [searchParams[key], value];
+      }
+    }
+  }
+  let fromUrl: Record<string, string | string[]> = {
+    ...searchParams,
+    ...extractParams(path, url),
+  };
+
+  //Parse back objects
+  const parsedObjectDepth = merge(fromUrl, parseObjectFromForm(fromUrl));
+  //Make sure numbers are actually treated as numbers, boolean, so we can use proper zod schema
+  let parsedNumbersOnly = parseNumberFromForm(paramsValidation, parsedObjectDepth);
+  if (typeof parsedNumbersOnly !== "object") {
+    // It should not really happen unless the value is undefined
+    // Here to please the typescript complier
+    parsedNumbersOnly = undefined;
+  }
+
+  //TODO this nonEmpty does not work for undefined objects
+  // (??? What does this mean, i don't even know anymore)
+  const parsedNumbers = merge(parsedObjectDepth, parsedNumbersOnly, "nonEmpty");
+
+  let parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);
+  if (typeof parsedBooleans !== "object") {
+    // It should not really happen unless the value is undefined
+    // Here to please the typescript complier
+    parsedBooleans = undefined;
+  }
+
+  const parsedBooleansAndNumbers = merge(parsedNumbers, parsedBooleans, "nonEmpty");
+  return paramsValidation.safeParse(parsedBooleansAndNumbers);
+};

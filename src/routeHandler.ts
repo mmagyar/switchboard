@@ -9,10 +9,9 @@ import {
   Unauthorized,
   httpMethodSuccessCodes,
 } from "./staticDefs.ts";
-import { forEach, merge } from "./util.ts";
+import { forEach } from "./util.ts";
 import type { Route } from "./routeDef.ts";
-import { parseBooleanFromForm, parseNumberFromForm, parseObjectFromForm } from "./routeParser.ts";
-import { extractParams } from "./urlUtils.ts";
+import { parseBooleanFromForm, parseNumberFromForm, parseUrl } from "./routeParser.ts";
 import { VerboseErrorOutput } from "./env.ts";
 
 export type HandlerWithoutBodyFn<USER, PARAMS extends z.ZodType, OUT extends z.ZodType> = (
@@ -155,50 +154,7 @@ export const wrapHandler = <
         );
       }
       const url = new URL(req.url);
-      let searchParams: Record<
-        string,
-        string | string[] //| number | number[] | boolean | boolean[] | object | object[]
-      > = {};
-      for (const [key, value] of url.searchParams.entries()) {
-        if (searchParams[key] === undefined) {
-          searchParams[key] = value;
-        } else {
-          if (Array.isArray(searchParams[key])) {
-            searchParams[key].push(value);
-          } else {
-            searchParams[key] = [searchParams[key], value];
-          }
-        }
-      }
-      let fromUrl: Record<string, string | string[]> = {
-        ...searchParams,
-        ...extractParams(path, url),
-      };
-
-      //Parse back objects
-      const parsedObjectDepth = merge(fromUrl, parseObjectFromForm(fromUrl));
-      //Make sure numbers are actually treated as numbers, boolean, so we can use proper zod schema
-      let parsedNumbersOnly = parseNumberFromForm(paramsValidation, parsedObjectDepth);
-      if (typeof parsedNumbersOnly !== "object") {
-        // It should not really happen unless the value is undefined
-        // Here to please the typescript complier
-        parsedNumbersOnly = undefined;
-      }
-
-      //TODO this nonEmpty does not work for undefined objects
-      // (??? What does this mean, i don't even know anymore)
-      const parsedNumbers = merge(parsedObjectDepth, parsedNumbersOnly, "nonEmpty");
-
-      let parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);
-      if (typeof parsedBooleans !== "object") {
-        // It should not really happen unless the value is undefined
-        // Here to please the typescript complier
-        parsedBooleans = undefined;
-      }
-
-      const parsedBooleansAndNumbers = merge(parsedNumbers, parsedBooleans, "nonEmpty");
-      // This will throw a validation error we are not matching schema
-      const queryParams = paramsValidation.safeParse(parsedBooleansAndNumbers);
+      const queryParams = parseUrl(url, path, paramsValidation);
       if (!queryParams.success) {
         return new Response("Path or query params did not match defined schema:" + queryParams.error, { status: 400 });
       }

@@ -109,6 +109,9 @@ export const defToUrl = <PATH extends string, PARAMS extends ZodType>(
 
   forEach(paramsIn, (value, key) => {
     if (routeParams.includes(String(key))) return undefined;
+    if (typeof value === "undefined") {
+      return;
+    }
     if (typeof value === "object" && value !== null) {
       return objectStringify(key, value, search);
     }

@@ -37,10 +37,7 @@ describe("decompose url string", () => {
   test("get id containing keys", () => {
     expect(getIdNames(["hello"] as const)).toStrictEqual([]);
     expect(getIdNames(["hello", "guest_id"] as const)).toStrictEqual(["guest_id"]);
-    expect(getIdNames(["hello", "guest_id", "item_id"] as const)).toStrictEqual([
-      "guest_id",
-      "item_id",
-    ]);
+    expect(getIdNames(["hello", "guest_id", "item_id"] as const)).toStrictEqual(["guest_id", "item_id"]);
     expect(getNonIdNames(["hello"] as const)).toStrictEqual(["hello"]);
     expect(getNonIdNames(["hello", "guest_id"] as const)).toStrictEqual(["hello"]);
     expect(getNonIdNames(["hello", "guest_id", "item"] as const)).toStrictEqual(["hello", "item"]);
@@ -141,9 +138,7 @@ describe("defToGetUrl", () => {
         outputValidation: z.unknown(),
         permissionsNeeded: "",
       } as const;
-      expect(defToUrl(def, { array: ["John", "Jane"] })).toBe(
-        "/testpath?array.0=John&array.1=Jane",
-      );
+      expect(defToUrl(def, { array: ["John", "Jane"] })).toBe("/testpath?array.0=John&array.1=Jane");
     });
     //test nested array, object under array
     test("nested array", () => {
@@ -190,9 +185,7 @@ describe("defToGetUrl", () => {
             ],
           },
         }),
-      ).toBe(
-        "/testpath?nested.array.0.name=John&nested.array.0.age=30&nested.array.1.name=Jane&nested.array.1.age=25",
-      );
+      ).toBe("/testpath?nested.array.0.name=John&nested.array.0.age=30&nested.array.1.name=Jane&nested.array.1.age=25");
     });
   });
   test("with URL params and search params", () => {
@@ -360,5 +353,23 @@ describe("defToGetUrl", () => {
     ).toBe(
       "/testpath?spaced%252520out.star%25252B%25253E%25253C%25253D%252526array.0.name=Joh%60n&spaced%252520out.star%25252B%25253E%25253C%25253D%252526array.0.age=30&spaced%252520out.star%25252B%25253E%25253C%25253D%252526array.1.name=Jane&spaced%252520out.star%25252B%25253E%25253C%25253D%252526array.1.age=25",
     );
+  });
+
+  test("undefined is omitted from the serialization", () => {
+    const def = {
+      method: "get",
+      path: "/testpath",
+      paramsValidation: z.object({
+        "spaced out": z.object({}).optional(),
+      }),
+      outputValidation: z.unknown(),
+      permissionsNeeded: "",
+    } as const;
+
+    expect(
+      defToUrl(def, {
+        "spaced out": undefined,
+      }),
+    ).toBe("/testpath");
   });
 });

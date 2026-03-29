@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { RouteHandlerDefiner, type FormatOutput, type FormatStreamOutput, type HandlerWithoutBodyFn } from "./routeHandler.ts";
+import { RouteHandlerDefiner, type FormatOutput, type HandlerWithoutBodyFn } from "./routeHandler.ts";
 import { define, type UrlParamsSchema } from "./routeDef.ts";
 import { z } from "zod";
 const getHandler = (
@@ -215,8 +215,7 @@ describe("RouteHandler", () => {
       const makeHandler = <HANDLER extends HandlerWithoutBodyFn<{}, UrlParamsSchema<"/:id">, typeof outputSchema>>(
         handler: HANDLER,
         opts?: {
-          formatOutput?: FormatOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}>;
-          formatStreamOutput?: FormatStreamOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}, Awaited<ReturnType<HANDLER>>>;
+          formatOutput?: FormatOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}, Awaited<ReturnType<HANDLER>>>;
           outputErrorWarning?: (error: z.ZodError<unknown>, data: unknown, method: string, url: string) => void;
         },
       ) => {
@@ -225,7 +224,7 @@ describe("RouteHandler", () => {
           async () => ({}),
           opts?.outputErrorWarning,
         );
-        return handle(def.get("/:id", "", outputSchema), handler, opts?.formatOutput, opts?.formatStreamOutput);
+        return handle(def.get("/:id", "", outputSchema), handler, opts?.formatOutput);
       };
 
       test("sync handler still returns JSON as before", async () => {
@@ -265,46 +264,7 @@ describe("RouteHandler", () => {
         expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
       });
 
-      test("formatOutput receives fully resolved data even when handler returned promises", async () => {
-        let receivedData!: z.infer<typeof outputSchema>;
-        const route = makeHandler(
-          () => ({
-            title: "Hello",
-            content: Promise.resolve("Async World"),
-          }),
-          {
-            formatOutput: async (data, _user, _req, _params) => {
-              receivedData = data;
-              return {
-                data: JSON.stringify(data),
-                headers: new Headers({ "Content-Type": "application/json" }),
-              };
-            },
-          },
-        );
-        const res = await route.handlerWrapped(new Request("https://example.com/1"));
-        expect(res.status).toBe(200);
-        // formatOutput should have received plain resolved values, not promises
-        expect(receivedData.title).toBe("Hello");
-        expect(receivedData.content).toBe("Async World");
-        expect(receivedData.content).not.toBeInstanceOf(Promise);
-        expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
-      });
-
-      test("formatOutput with sync data works normally — data properties are plain values", async () => {
-        const route = makeHandler(() => ({ title: "Hello", content: "World" }), {
-          formatOutput: (data, _user, _req, _params) => ({
-            // data.title and data.content are string — no await needed
-            data: `<h1>${data.title}</h1><p>${data.content}</p>`,
-            headers: new Headers({ "Content-Type": "text/html" }),
-          }),
-        });
-        const res = await route.handlerWrapped(new Request("https://example.com/1"));
-        expect(res.status).toBe(200);
-        expect(await res.text()).toBe("<h1>Hello</h1><p>World</p>");
-      });
-
-      test("formatStreamOutput receives raw promises when handler returns promise properties", async () => {
+      test("formatOutput receives raw promises when handler returns promise properties", async () => {
         let receivedData!: { title: string; content: Promise<string> };
         const route = makeHandler(
           () => ({
@@ -312,7 +272,7 @@ describe("RouteHandler", () => {
             content: Promise.resolve("Async World"),
           }),
           {
-            formatStreamOutput: async (data, _user, _req, _params) => {
+            formatOutput: async (data, _user, _req, _params) => {
               receivedData = data;
               // TypeScript knows data.title is `string` — no await needed
               // TypeScript knows data.content is `Promise<string>` — must await
@@ -325,20 +285,33 @@ describe("RouteHandler", () => {
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
-        // formatStreamOutput received the exact types — title is a plain string, content is a Promise
+        // formatOutput received the exact types — title is a plain string, content is a Promise
         expect(receivedData.title).toBe("Hello");
         expect(receivedData.content).toBeInstanceOf(Promise);
         expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
       });
 
-      test("formatStreamOutput knows exact types — plain string properties need no await", async () => {
+      test("formatOutput with sync data — data properties are plain values, no await needed", async () => {
+        const route = makeHandler(() => ({ title: "Hello", content: "World" }), {
+          formatOutput: (data, _user, _req, _params) => ({
+            // data.title and data.content are string — no await needed
+            data: `<h1>${data.title}</h1><p>${data.content}</p>`,
+            headers: new Headers({ "Content-Type": "text/html" }),
+          }),
+        });
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("<h1>Hello</h1><p>World</p>");
+      });
+
+      test("formatOutput knows exact types — plain string properties need no await", async () => {
         const route = makeHandler(
           () => ({
             title: "Hello",
             content: Promise.resolve("Async World"),
           }),
           {
-            formatStreamOutput: (data) => {
+            formatOutput: (data) => {
               // data.title is exactly `string` — calling string methods directly is valid
               const shout: string = data.title.toUpperCase();
               // data.content is exactly `Promise<string>` — it cannot be used as a plain string
@@ -358,14 +331,14 @@ describe("RouteHandler", () => {
         expect(await res.text()).toBe("HELLOAsync World");
       });
 
-      test("formatStreamOutput can produce a ReadableStream for streaming SSR", async () => {
+      test("formatOutput can produce a ReadableStream for streaming SSR", async () => {
         const route = makeHandler(
           () => ({
             title: "Hello",
             content: new Promise<string>((resolve) => setTimeout(() => resolve("Streamed!"), 10)),
           }),
           {
-            formatStreamOutput: (data, _user, _req, _params) => {
+            formatOutput: (data, _user, _req, _params) => {
               const stream = new ReadableStream({
                 async start(controller) {
                   controller.enqueue(`<h1>${data.title}</h1>`);
@@ -386,7 +359,7 @@ describe("RouteHandler", () => {
         expect(await res.text()).toBe("<h1>Hello</h1><p>Streamed!</p>");
       });
 
-      test("formatStreamOutput: per-property validation fires outputErrorWarning for invalid async values", async () => {
+      test("per-property validation fires outputErrorWarning for invalid async values", async () => {
         const warnings: any[] = [];
         const route = makeHandler(
           () => ({
@@ -397,7 +370,7 @@ describe("RouteHandler", () => {
             outputErrorWarning: (error, data, method, url) => {
               warnings.push({ error, data, method, url });
             },
-            formatStreamOutput: async (data, _user, _req, _params) => ({
+            formatOutput: async (data, _user, _req, _params) => ({
               data: JSON.stringify({ title: data.title, content: await data.content }),
               headers: new Headers({ "Content-Type": "application/json" }),
             }),
@@ -479,7 +452,7 @@ describe("RouteHandler", () => {
           expect(await res.json()).toBe(42);
         });
 
-        test("z.string() output — formatOutput receives the plain string, not a mapped object", async () => {
+        test("z.string() output — formatOutput receives the plain string directly", async () => {
           const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
           let receivedData: unknown;
           const route = handle(

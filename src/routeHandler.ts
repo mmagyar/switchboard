@@ -49,18 +49,10 @@ export type FormatOutputReturnStructure = {
 
 export type FormatOutputReturn = Promise<FormatOutputReturnStructure> | FormatOutputReturnStructure;
 
-/** Receives fully resolved output — all promises have been awaited before this is called. */
-export type FormatOutput<PARAMS extends z.ZodType, OUT extends z.ZodType, U> = (
-  data: z.infer<OUT>,
-  user: U,
-  request: Request,
-  params: z.infer<PARAMS>,
-) => FormatOutputReturn;
-
-/** Receives output where each property may still be a Promise, enabling streaming SSR / Suspense patterns.
- *  The `RAW` type parameter is inferred from the handler's return type, so each property's type is exact:
- *  if the handler returned `{ title: string, content: Promise<string> }`, `data` has exactly that type. */
-export type FormatStreamOutput<
+/** Formats the handler output into a Response. `data` has the exact type the handler returned:
+ *  plain values stay plain, Promise-valued properties stay as Promises — enabling streaming SSR.
+ *  `RAW` is inferred automatically from the handler's return type at the call site. */
+export type FormatOutput<
   PARAMS extends z.ZodType,
   OUT extends z.ZodType,
   U,
@@ -90,8 +82,7 @@ export type DefineType<PERMISSION, USER> = <
 >(
   routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
   handler: HANDLER,
-  formatOutput?: FormatOutput<PARAMS, OUT, USER>,
-  formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
+  formatOutput?: FormatOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
 ) => RouteWithHandler<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>;
 
 const errorResponse =
@@ -125,10 +116,10 @@ const errorResponse =
 
     * @param def The route definition
     * @param handler The handler function
-    * @param formatOutput The function to format the output. Receives fully resolved data.
-    * @param formatStreamOutput Alternative to formatOutput for streaming SSR. Receives data where
-    *                           each property may still be a Promise. Per-property validation fires
-    *                           in the background as each promise resolves.
+    * @param formatOutput Formats the handler output. Receives data exactly as the handler returned it:
+    *                     plain values are plain, Promise-valued properties remain as Promises.
+    *                     Per-property validation fires in the background as each promise resolves.
+    *                     If omitted, all promises are resolved, output is validated, and JSON is returned.
     * @param authorizer Used to check permission, it's okay to ForbiddenHttpError in case of an unauthorized used
     * @param getUserFromRequest Create a type safe user object based on the request,
                              ideally a middleware should do the authentication and populate req.user,
@@ -150,7 +141,6 @@ export const wrapHandler = <
   def: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
   handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
   formatOutput: FormatOutput<PARAMS, OUT, USER> | undefined,
-  formatStreamOutput: FormatStreamOutput<PARAMS, OUT, USER> | undefined,
   authorizer: (
     user: USER,
     permissionsNeeded: PERMISSION,
@@ -240,17 +230,17 @@ export const wrapHandler = <
         result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT>)(queryParams.data, user);
       }
 
-      if (formatStreamOutput) {
-        // Streaming path: fire-and-forget per-property validation, pass raw promises to formatStreamOutput
+      if (formatOutput) {
+        // Format path: pass data as-is, validate each property in the background as it resolves
         validatePerProperty(result);
-        const formatted = await formatStreamOutput(result as PromisableProperties<z.infer<OUT>>, user, req, queryParams.data);
+        const formatted = await formatOutput(result as PromisableProperties<z.infer<OUT>>, user, req, queryParams.data);
         return new Response(formatted.data, {
           status: (formatted.status ?? formatted.redirect) ? 303 : httpMethodSuccessCodes[method],
           headers: formatted.headers,
         });
       }
 
-      // Non-streaming path: resolve any promise-valued properties, then validate the whole object
+      // JSON path: resolve all promises, validate the whole object, then JSON.stringify
       if (hasPromiseValues(result)) {
         result = await resolveAllProperties(result);
       }
@@ -261,15 +251,6 @@ export const wrapHandler = <
         // If the validation was successful, use that, since zod will strip extra parameters
         result = output.data;
       }
-
-      if (formatOutput) {
-        const formatted = await formatOutput(result as z.infer<OUT>, user, req, queryParams.data);
-        return new Response(formatted.data, {
-          status: (formatted.status ?? formatted.redirect) ? 303 : httpMethodSuccessCodes[method],
-          headers: formatted.headers,
-        });
-      }
-
       return new Response(JSON.stringify(result), {
         status: httpMethodSuccessCodes[method],
         headers: { "Content-Type": "application/json" },
@@ -329,17 +310,15 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
   >(
     routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
     handler: HANDLER,
-    formatOutput?: FormatOutput<PARAMS, OUT, USER>,
-    formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
+    formatOutput?: FormatOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
   ) => {
     return {
       ...routeDef,
       handlerWrapped: wrapHandler<USER, PERMISSION, METHOD, PATH, PARAMS, BODY, OUT>(
         routeDef,
         handler,
-        formatOutput,
         // Safe: Awaited<ReturnType<HANDLER>> is always a subtype of PromisableProperties<z.infer<OUT>>
-        formatStreamOutput as FormatStreamOutput<PARAMS, OUT, USER> | undefined,
+        formatOutput as FormatOutput<PARAMS, OUT, USER> | undefined,
         authorizer,
         getUserFromRequest,
         outputErrorWarning,

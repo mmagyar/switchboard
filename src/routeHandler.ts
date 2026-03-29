@@ -1,5 +1,5 @@
 /* eslint-disable max-lines-per-function */
-import type { ZodError, z } from "zod";
+import type { ZodError, ZodObject, z } from "zod";
 import {
   type HTTPMethods,
   type HTTPMethodsWithBody,
@@ -14,16 +14,19 @@ import type { Route } from "./routeDef.ts";
 import { parseBooleanFromForm, parseNumberFromForm, parseUrl } from "./routeParser.ts";
 import { VerboseErrorOutput } from "./env.ts";
 
+export type Promisable<T> = T | Promise<T>;
+export type PromisableProperties<T> = T extends object ? { [K in keyof T]: Promisable<T[K]> } : T;
+
 export type HandlerWithoutBodyFn<USER, PARAMS extends z.ZodType, OUT extends z.ZodType> = (
   params: z.infer<PARAMS>,
   user: USER,
-) => Promise<z.infer<OUT>> | z.infer<OUT>;
+) => Promisable<PromisableProperties<z.infer<OUT>>>;
 
 export type HandlerWithBodyFn<USER, PARAMS extends z.ZodType, BODY extends z.ZodType, OUT extends z.ZodType> = (
   params: z.infer<PARAMS>,
   body: z.infer<BODY>,
   user: USER,
-) => Promise<z.infer<OUT>> | z.infer<OUT>;
+) => Promisable<PromisableProperties<z.infer<OUT>>>;
 
 export type HandlerBothFn<
   METHOD extends HTTPMethods,
@@ -47,7 +50,7 @@ export type FormatOutputReturnStructure = {
 export type FormatOutputReturn = Promise<FormatOutputReturnStructure> | FormatOutputReturnStructure;
 
 export type FormatOutput<PARAMS extends z.ZodType, OUT extends z.ZodType, U> = (
-  data: z.infer<OUT>,
+  data: PromisableProperties<z.infer<OUT>>,
   user: U,
   request: Request,
   params: z.infer<PARAMS>,
@@ -141,6 +144,35 @@ export const wrapHandler = <
 ): ReqRes => {
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = def;
 
+  const resolveAllProperties = async (obj: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const entries = Object.entries(obj);
+    const resolved = await Promise.all(entries.map(async ([k, v]) => [k, await v] as const));
+    return Object.fromEntries(resolved);
+  };
+
+  const hasPromiseValues = (obj: unknown): boolean =>
+    obj !== null &&
+    typeof obj === "object" &&
+    Object.values(obj as Record<string, unknown>).some((v) => v instanceof Promise);
+
+  const validatePerProperty = (obj: Record<string, unknown>, schema: OUT) => {
+    const shape = (schema as unknown as ZodObject<any>).shape;
+    if (!shape) return;
+    for (const [key, value] of Object.entries(obj)) {
+      const fieldSchema = shape[key];
+      if (!fieldSchema) continue;
+      const wrap = (v: unknown) => {
+        const parsed = (fieldSchema as z.ZodType).safeParse(v);
+        if (!parsed.success) outputErrorWarning?.(parsed.error, v, method, `${key}`);
+      };
+      if (value instanceof Promise) {
+        value.then(wrap);
+      } else {
+        wrap(value);
+      }
+    }
+  };
+
   return async (req: Request): Promise<Response> => {
     let user: USER;
     try {
@@ -194,16 +226,9 @@ export const wrapHandler = <
         result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT>)(queryParams.data, user);
       }
 
-      const output = outputValidation.safeParse(result);
-      if (!output.success) {
-        outputErrorWarning?.(output.error, result, method, req.url);
-      } else {
-        //If the validation was successful, use that, since zod will strip extra parameters
-        result = output.data;
-      }
-
-      if (formatOutput) {
-        //TODO maybe skip this if output schema validation fails? otherwise it may lead to unexpeted errors
+      if (formatOutput && hasPromiseValues(result)) {
+        // Streaming path: validate per-property in the background, pass raw promises to formatOutput
+        validatePerProperty(result, outputValidation);
         result = await formatOutput(result, user, req, queryParams.data);
 
         return new Response(result.data, {
@@ -211,10 +236,32 @@ export const wrapHandler = <
           headers: result.headers,
         });
       } else {
-        return new Response(JSON.stringify(result), {
-          status: httpMethodSuccessCodes[method],
-          headers: { "Content-Type": "application/json" },
-        });
+        // Non-streaming path: resolve all promises first, then validate the whole object
+        if (hasPromiseValues(result)) {
+          result = await resolveAllProperties(result);
+        }
+
+        const output = outputValidation.safeParse(result);
+        if (!output.success) {
+          outputErrorWarning?.(output.error, result, method, req.url);
+        } else {
+          //If the validation was successful, use that, since zod will strip extra parameters
+          result = output.data;
+        }
+
+        if (formatOutput) {
+          result = await formatOutput(result as PromisableProperties<z.infer<OUT>>, user, req, queryParams.data);
+
+          return new Response(result.data, {
+            status: (result.status ?? result.redirect) ? 303 : httpMethodSuccessCodes[method],
+            headers: result.headers,
+          });
+        } else {
+          return new Response(JSON.stringify(result), {
+            status: httpMethodSuccessCodes[method],
+            headers: { "Content-Type": "application/json" },
+          });
+        }
       }
     } catch (error) {
       const errorParsed = await errorParser?.(error);

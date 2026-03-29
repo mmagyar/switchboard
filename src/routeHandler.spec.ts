@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
-import { RouteHandlerDefiner } from "./routeHandler.ts";
-import { define } from "./routeDef.ts";
+import { RouteHandlerDefiner, type FormatOutput, type HandlerWithoutBodyFn, type PromisableProperties } from "./routeHandler.ts";
+import { define, type UrlParamsSchema } from "./routeDef.ts";
 import { z } from "zod";
 const getHandler = (
   options: { optionalQuery?: boolean; addNumber?: boolean; schema?: z.ZodTypeAny } = {
@@ -19,18 +19,14 @@ const getHandler = (
       options.schema ??
         z.object({
           id: z.number(),
-          name: options.optionalQuery
-            ? z.string().min(2).max(100).optional()
-            : z.string().min(2).max(100),
+          name: options.optionalQuery ? z.string().min(2).max(100).optional() : z.string().min(2).max(100),
           "dotty.potty": z.string().min(2).max(100).optional(),
           "obj.different": z.number().optional(),
           obj: z
             .object({
               booboo: z.boolean().optional(),
               key: z.string(),
-              num: options.addNumber
-                ? z.number().min(0).max(100)
-                : z.number().min(0).max(100).optional(),
+              num: options.addNumber ? z.number().min(0).max(100) : z.number().min(0).max(100).optional(),
               value: z
                 .object({
                   name: z.string(),
@@ -121,9 +117,7 @@ describe("RouteHandler", () => {
     });
 
     test("can handle deep objects in the query params", async () => {
-      const req = new Request(
-        "https://example.com/1/?name=Joe&obj.key=value&obj.value.name=deep&obj.value.age=35",
-      );
+      const req = new Request("https://example.com/1/?name=Joe&obj.key=value&obj.value.name=deep&obj.value.age=35");
       const res = await getHandler({ optionalQuery: false }).handlerWrapped(req);
       const json = await res.json();
       expect(res.status).toBe(200);
@@ -155,9 +149,7 @@ describe("RouteHandler", () => {
         "dotty.potty": "helloYou",
       });
 
-      const invalidReq = new Request(
-        "https://example.com/1/?dotty.potty=helloYou&obj.different=32",
-      );
+      const invalidReq = new Request("https://example.com/1/?dotty.potty=helloYou&obj.different=32");
       const { status } = await getHandler({ optionalQuery: true }).handlerWrapped(invalidReq);
       expect(status).toBe(400);
     });
@@ -214,6 +206,258 @@ describe("RouteHandler", () => {
           { name: "jane", age: 25 },
         ],
         name: "Joe",
+      });
+    });
+
+    describe("promisable properties", () => {
+      const outputSchema = z.object({ title: z.string(), content: z.string() });
+
+      type TestHandler = HandlerWithoutBodyFn<{}, UrlParamsSchema<"/:id">, typeof outputSchema>;
+
+      const makeHandler = (
+        handler: TestHandler,
+        opts?: {
+          formatOutput?: FormatOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}>;
+          outputErrorWarning?: (error: z.ZodError<unknown>, data: unknown, method: string, url: string) => void;
+        },
+      ) => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          opts?.outputErrorWarning,
+        );
+        return handle(def.get("/:id", "", outputSchema), handler, opts?.formatOutput);
+      };
+
+      test("sync handler still returns JSON as before", async () => {
+        const route = makeHandler(() => ({ title: "Hello", content: "World" }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ title: "Hello", content: "World" });
+      });
+
+      test("handler with promise properties resolves all for JSON response", async () => {
+        const route = makeHandler(() => ({
+          title: "Hello",
+          content: Promise.resolve("Async World"),
+        }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
+      });
+
+      test("handler with all promise properties resolves for JSON response", async () => {
+        const route = makeHandler(() => ({
+          title: Promise.resolve("Async Hello"),
+          content: Promise.resolve("Async World"),
+        }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ title: "Async Hello", content: "Async World" });
+      });
+
+      test("async handler returning promise properties resolves for JSON response", async () => {
+        const route = makeHandler(async () => ({
+          title: "Hello",
+          content: Promise.resolve("Async World"),
+        }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
+      });
+
+      test("formatOutput receives raw promises when handler returns promise properties", async () => {
+        let receivedData!: PromisableProperties<z.infer<typeof outputSchema>>;
+        const route = makeHandler(
+          () => ({
+            title: "Hello",
+            content: Promise.resolve("Async World"),
+          }),
+          {
+            formatOutput: async (data, _user, _req, _params) => {
+              receivedData = data;
+              // Resolve the promise manually, as a streaming renderer would
+              const resolved = {
+                title: data.title,
+                content: await data.content,
+              };
+              return {
+                data: JSON.stringify(resolved),
+                headers: new Headers({ "Content-Type": "application/json" }),
+              };
+            },
+          },
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        // The formatOutput should have received the raw promise
+        expect(receivedData.title).toBe("Hello");
+        expect(receivedData.content).toBeInstanceOf(Promise);
+        // But the response body should be fully resolved
+        expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
+      });
+
+      test("formatOutput with all-sync data still works normally", async () => {
+        const route = makeHandler(() => ({ title: "Hello", content: "World" }), {
+          formatOutput: async (data, _user, _req, _params) => ({
+            data: `<h1>${data.title}</h1><p>${data.content}</p>`,
+            headers: new Headers({ "Content-Type": "text/html" }),
+          }),
+        });
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("<h1>Hello</h1><p>World</p>");
+      });
+
+      test("formatOutput can produce a ReadableStream for streaming SSR", async () => {
+        const route = makeHandler(
+          () => ({
+            title: "Hello",
+            content: new Promise<string>((resolve) => setTimeout(() => resolve("Streamed!"), 10)),
+          }),
+          {
+            formatOutput: (data, _user, _req, _params) => {
+              const stream = new ReadableStream({
+                async start(controller) {
+                  controller.enqueue(`<h1>${data.title}</h1>`);
+                  const content = await data.content;
+                  controller.enqueue(`<p>${content}</p>`);
+                  controller.close();
+                },
+              });
+              return {
+                data: stream,
+                headers: new Headers({ "Content-Type": "text/html" }),
+              };
+            },
+          },
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe("<h1>Hello</h1><p>Streamed!</p>");
+      });
+
+      test("per-property validation fires outputErrorWarning for invalid async values", async () => {
+        const warnings: any[] = [];
+        const route = makeHandler(
+          () => ({
+            title: "Valid",
+            content: Promise.resolve(12345 as unknown as string), // intentionally wrong type to test validation
+          }),
+          {
+            outputErrorWarning: (error, data, method, url) => {
+              warnings.push({ error, data, method, url });
+            },
+            formatOutput: async (data, _user, _req, _params) => ({
+              data: JSON.stringify({ title: await data.title, content: await data.content }),
+              headers: new Headers({ "Content-Type": "application/json" }),
+            }),
+          },
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        // Wait a tick for the background per-property validation to fire
+        await new Promise((r) => setTimeout(r, 10));
+        expect(warnings.length).toBeGreaterThan(0);
+        expect(warnings.some((w) => w.url === "content")).toBe(true);
+      });
+
+      test("JSON path validates resolved values and calls outputErrorWarning on mismatch", async () => {
+        const warnings: any[] = [];
+        const route = makeHandler(
+          () => ({
+            title: "Valid",
+            content: Promise.resolve(999 as unknown as string), // intentionally wrong type to test validation
+          }),
+          {
+            outputErrorWarning: (error, data, method, url) => {
+              warnings.push({ error, data, method, url });
+            },
+          },
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        // Full-object validation fires on the resolved result
+        expect(warnings.length).toBeGreaterThan(0);
+      });
+
+      test("JSON path strips extra properties after validation when all sync", async () => {
+        const route = makeHandler(() => ({
+          title: "Hello",
+          content: "World",
+          extra: "should be stripped",
+        }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        const json = await res.json();
+        expect(json).toEqual({ title: "Hello", content: "World" });
+        expect(json.extra).toBeUndefined();
+      });
+
+      test("JSON path strips extra properties after validation when promises resolved", async () => {
+        const route = makeHandler(() => ({
+          title: Promise.resolve("Hello"),
+          content: Promise.resolve("World"),
+          extra: Promise.resolve("should be stripped"),
+        }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        const json = await res.json();
+        expect(json).toEqual({ title: "Hello", content: "World" });
+        expect(json.extra).toBeUndefined();
+      });
+
+      describe("primitive output schemas", () => {
+        test("z.string() output — sync handler returns string as JSON", async () => {
+          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
+          const route = handle(def.get("/:id", "", z.string()), async () => "hello");
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          expect(await res.json()).toBe("hello");
+        });
+
+        test("z.string() output — async handler returning Promise<string>", async () => {
+          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
+          const route = handle(def.get("/:id", "", z.string()), async () => Promise.resolve("hello async"));
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          expect(await res.json()).toBe("hello async");
+        });
+
+        test("z.number() output — sync handler returns number as JSON", async () => {
+          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
+          const route = handle(def.get("/:id", "", z.number()), async () => 42);
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          expect(await res.json()).toBe(42);
+        });
+
+        test("z.string() output — formatOutput receives the plain string, not a mapped object", async () => {
+          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
+          let receivedData: unknown;
+          const route = handle(
+            def.get("/:id", "", z.string()),
+            async () => "hello",
+            async (data) => {
+              receivedData = data;
+              return {
+                data: `<p>${data}</p>`,
+                headers: new Headers({ "Content-Type": "text/html" }),
+              };
+            },
+          );
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          expect(await res.text()).toBe("<p>hello</p>");
+          expect(receivedData).toBe("hello");
+          expect(typeof receivedData).toBe("string");
+        });
+
+        test("z.boolean() output — sync handler", async () => {
+          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
+          const route = handle(def.get("/:id", "", z.boolean()), async () => true);
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          expect(await res.json()).toBe(true);
+        });
       });
     });
   });

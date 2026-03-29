@@ -57,13 +57,15 @@ export type FormatOutput<PARAMS extends z.ZodType, OUT extends z.ZodType, U> = (
   params: z.infer<PARAMS>,
 ) => FormatOutputReturn;
 
-/** Receives output where each property may still be a Promise, enabling streaming SSR / Suspense patterns. */
-export type FormatStreamOutput<PARAMS extends z.ZodType, OUT extends z.ZodType, U> = (
-  data: PromisableProperties<z.infer<OUT>>,
-  user: U,
-  request: Request,
-  params: z.infer<PARAMS>,
-) => FormatOutputReturn;
+/** Receives output where each property may still be a Promise, enabling streaming SSR / Suspense patterns.
+ *  The `RAW` type parameter is inferred from the handler's return type, so each property's type is exact:
+ *  if the handler returned `{ title: string, content: Promise<string> }`, `data` has exactly that type. */
+export type FormatStreamOutput<
+  PARAMS extends z.ZodType,
+  OUT extends z.ZodType,
+  U,
+  RAW = PromisableProperties<z.infer<OUT>>,
+> = (data: RAW, user: U, request: Request, params: z.infer<PARAMS>) => FormatOutputReturn;
 
 type ReqRes = (req: Request) => Promise<Response>;
 
@@ -84,11 +86,12 @@ export type DefineType<PERMISSION, USER> = <
   PARAMS extends z.ZodType,
   BODY extends z.ZodType,
   OUT extends z.ZodType,
+  HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
 >(
   routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
-  handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
+  handler: HANDLER,
   formatOutput?: FormatOutput<PARAMS, OUT, USER>,
-  formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER>,
+  formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
 ) => RouteWithHandler<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>;
 
 const errorResponse =
@@ -240,7 +243,7 @@ export const wrapHandler = <
       if (formatStreamOutput) {
         // Streaming path: fire-and-forget per-property validation, pass raw promises to formatStreamOutput
         validatePerProperty(result);
-        const formatted = await formatStreamOutput(result, user, req, queryParams.data);
+        const formatted = await formatStreamOutput(result as PromisableProperties<z.infer<OUT>>, user, req, queryParams.data);
         return new Response(formatted.data, {
           status: (formatted.status ?? formatted.redirect) ? 303 : httpMethodSuccessCodes[method],
           headers: formatted.headers,
@@ -322,11 +325,12 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
     PARAMS extends z.ZodType,
     BODY extends z.ZodType,
     OUT extends z.ZodType,
+    HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
   >(
     routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
-    handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
+    handler: HANDLER,
     formatOutput?: FormatOutput<PARAMS, OUT, USER>,
-    formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER>,
+    formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
   ) => {
     return {
       ...routeDef,
@@ -334,7 +338,8 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
         routeDef,
         handler,
         formatOutput,
-        formatStreamOutput,
+        // Safe: Awaited<ReturnType<HANDLER>> is always a subtype of PromisableProperties<z.infer<OUT>>
+        formatStreamOutput as FormatStreamOutput<PARAMS, OUT, USER> | undefined,
         authorizer,
         getUserFromRequest,
         outputErrorWarning,

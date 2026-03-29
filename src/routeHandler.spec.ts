@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { RouteHandlerDefiner, type FormatOutput, type FormatStreamOutput, type HandlerWithoutBodyFn, type PromisableProperties } from "./routeHandler.ts";
+import { RouteHandlerDefiner, type FormatOutput, type FormatStreamOutput, type HandlerWithoutBodyFn } from "./routeHandler.ts";
 import { define, type UrlParamsSchema } from "./routeDef.ts";
 import { z } from "zod";
 const getHandler = (
@@ -212,13 +212,11 @@ describe("RouteHandler", () => {
     describe("promisable properties", () => {
       const outputSchema = z.object({ title: z.string(), content: z.string() });
 
-      type TestHandler = HandlerWithoutBodyFn<{}, UrlParamsSchema<"/:id">, typeof outputSchema>;
-
-      const makeHandler = (
-        handler: TestHandler,
+      const makeHandler = <HANDLER extends HandlerWithoutBodyFn<{}, UrlParamsSchema<"/:id">, typeof outputSchema>>(
+        handler: HANDLER,
         opts?: {
           formatOutput?: FormatOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}>;
-          formatStreamOutput?: FormatStreamOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}>;
+          formatStreamOutput?: FormatStreamOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}, Awaited<ReturnType<HANDLER>>>;
           outputErrorWarning?: (error: z.ZodError<unknown>, data: unknown, method: string, url: string) => void;
         },
       ) => {
@@ -307,7 +305,7 @@ describe("RouteHandler", () => {
       });
 
       test("formatStreamOutput receives raw promises when handler returns promise properties", async () => {
-        let receivedData!: PromisableProperties<z.infer<typeof outputSchema>>;
+        let receivedData!: { title: string; content: Promise<string> };
         const route = makeHandler(
           () => ({
             title: "Hello",
@@ -316,6 +314,8 @@ describe("RouteHandler", () => {
           {
             formatStreamOutput: async (data, _user, _req, _params) => {
               receivedData = data;
+              // TypeScript knows data.title is `string` — no await needed
+              // TypeScript knows data.content is `Promise<string>` — must await
               return {
                 data: JSON.stringify({ title: data.title, content: await data.content }),
                 headers: new Headers({ "Content-Type": "application/json" }),
@@ -325,10 +325,37 @@ describe("RouteHandler", () => {
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
-        // formatStreamOutput receives the raw promise
+        // formatStreamOutput received the exact types — title is a plain string, content is a Promise
         expect(receivedData.title).toBe("Hello");
         expect(receivedData.content).toBeInstanceOf(Promise);
         expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
+      });
+
+      test("formatStreamOutput knows exact types — plain string properties need no await", async () => {
+        const route = makeHandler(
+          () => ({
+            title: "Hello",
+            content: Promise.resolve("Async World"),
+          }),
+          {
+            formatStreamOutput: (data) => {
+              // data.title is exactly `string` — calling string methods directly is valid
+              const shout: string = data.title.toUpperCase();
+              // data.content is exactly `Promise<string>` — it cannot be used as a plain string
+              const contentIsPromise: Promise<string> = data.content;
+              const stream = new ReadableStream({
+                async start(controller) {
+                  controller.enqueue(shout);
+                  controller.enqueue(await contentIsPromise);
+                  controller.close();
+                },
+              });
+              return { data: stream, headers: new Headers({ "Content-Type": "text/plain" }) };
+            },
+          },
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(await res.text()).toBe("HELLOAsync World");
       });
 
       test("formatStreamOutput can produce a ReadableStream for streaming SSR", async () => {

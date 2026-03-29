@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { RouteHandlerDefiner, type FormatOutput, type HandlerWithoutBodyFn, type PromisableProperties } from "./routeHandler.ts";
+import { RouteHandlerDefiner, type FormatOutput, type FormatStreamOutput, type HandlerWithoutBodyFn, type PromisableProperties } from "./routeHandler.ts";
 import { define, type UrlParamsSchema } from "./routeDef.ts";
 import { z } from "zod";
 const getHandler = (
@@ -218,6 +218,7 @@ describe("RouteHandler", () => {
         handler: TestHandler,
         opts?: {
           formatOutput?: FormatOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}>;
+          formatStreamOutput?: FormatStreamOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}>;
           outputErrorWarning?: (error: z.ZodError<unknown>, data: unknown, method: string, url: string) => void;
         },
       ) => {
@@ -226,7 +227,7 @@ describe("RouteHandler", () => {
           async () => ({}),
           opts?.outputErrorWarning,
         );
-        return handle(def.get("/:id", "", outputSchema), handler, opts?.formatOutput);
+        return handle(def.get("/:id", "", outputSchema), handler, opts?.formatOutput, opts?.formatStreamOutput);
       };
 
       test("sync handler still returns JSON as before", async () => {
@@ -266,8 +267,8 @@ describe("RouteHandler", () => {
         expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
       });
 
-      test("formatOutput receives raw promises when handler returns promise properties", async () => {
-        let receivedData!: PromisableProperties<z.infer<typeof outputSchema>>;
+      test("formatOutput receives fully resolved data even when handler returned promises", async () => {
+        let receivedData!: z.infer<typeof outputSchema>;
         const route = makeHandler(
           () => ({
             title: "Hello",
@@ -276,13 +277,8 @@ describe("RouteHandler", () => {
           {
             formatOutput: async (data, _user, _req, _params) => {
               receivedData = data;
-              // Resolve the promise manually, as a streaming renderer would
-              const resolved = {
-                title: data.title,
-                content: await data.content,
-              };
               return {
-                data: JSON.stringify(resolved),
+                data: JSON.stringify(data),
                 headers: new Headers({ "Content-Type": "application/json" }),
               };
             },
@@ -290,16 +286,17 @@ describe("RouteHandler", () => {
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
-        // The formatOutput should have received the raw promise
+        // formatOutput should have received plain resolved values, not promises
         expect(receivedData.title).toBe("Hello");
-        expect(receivedData.content).toBeInstanceOf(Promise);
-        // But the response body should be fully resolved
+        expect(receivedData.content).toBe("Async World");
+        expect(receivedData.content).not.toBeInstanceOf(Promise);
         expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
       });
 
-      test("formatOutput with all-sync data still works normally", async () => {
+      test("formatOutput with sync data works normally — data properties are plain values", async () => {
         const route = makeHandler(() => ({ title: "Hello", content: "World" }), {
-          formatOutput: async (data, _user, _req, _params) => ({
+          formatOutput: (data, _user, _req, _params) => ({
+            // data.title and data.content are string — no await needed
             data: `<h1>${data.title}</h1><p>${data.content}</p>`,
             headers: new Headers({ "Content-Type": "text/html" }),
           }),
@@ -309,14 +306,39 @@ describe("RouteHandler", () => {
         expect(await res.text()).toBe("<h1>Hello</h1><p>World</p>");
       });
 
-      test("formatOutput can produce a ReadableStream for streaming SSR", async () => {
+      test("formatStreamOutput receives raw promises when handler returns promise properties", async () => {
+        let receivedData!: PromisableProperties<z.infer<typeof outputSchema>>;
+        const route = makeHandler(
+          () => ({
+            title: "Hello",
+            content: Promise.resolve("Async World"),
+          }),
+          {
+            formatStreamOutput: async (data, _user, _req, _params) => {
+              receivedData = data;
+              return {
+                data: JSON.stringify({ title: data.title, content: await data.content }),
+                headers: new Headers({ "Content-Type": "application/json" }),
+              };
+            },
+          },
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        // formatStreamOutput receives the raw promise
+        expect(receivedData.title).toBe("Hello");
+        expect(receivedData.content).toBeInstanceOf(Promise);
+        expect(await res.json()).toEqual({ title: "Hello", content: "Async World" });
+      });
+
+      test("formatStreamOutput can produce a ReadableStream for streaming SSR", async () => {
         const route = makeHandler(
           () => ({
             title: "Hello",
             content: new Promise<string>((resolve) => setTimeout(() => resolve("Streamed!"), 10)),
           }),
           {
-            formatOutput: (data, _user, _req, _params) => {
+            formatStreamOutput: (data, _user, _req, _params) => {
               const stream = new ReadableStream({
                 async start(controller) {
                   controller.enqueue(`<h1>${data.title}</h1>`);
@@ -337,7 +359,7 @@ describe("RouteHandler", () => {
         expect(await res.text()).toBe("<h1>Hello</h1><p>Streamed!</p>");
       });
 
-      test("per-property validation fires outputErrorWarning for invalid async values", async () => {
+      test("formatStreamOutput: per-property validation fires outputErrorWarning for invalid async values", async () => {
         const warnings: any[] = [];
         const route = makeHandler(
           () => ({
@@ -348,8 +370,8 @@ describe("RouteHandler", () => {
             outputErrorWarning: (error, data, method, url) => {
               warnings.push({ error, data, method, url });
             },
-            formatOutput: async (data, _user, _req, _params) => ({
-              data: JSON.stringify({ title: await data.title, content: await data.content }),
+            formatStreamOutput: async (data, _user, _req, _params) => ({
+              data: JSON.stringify({ title: data.title, content: await data.content }),
               headers: new Headers({ "Content-Type": "application/json" }),
             }),
           },

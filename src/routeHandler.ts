@@ -49,7 +49,16 @@ export type FormatOutputReturnStructure = {
 
 export type FormatOutputReturn = Promise<FormatOutputReturnStructure> | FormatOutputReturnStructure;
 
+/** Receives fully resolved output — all promises have been awaited before this is called. */
 export type FormatOutput<PARAMS extends z.ZodType, OUT extends z.ZodType, U> = (
+  data: z.infer<OUT>,
+  user: U,
+  request: Request,
+  params: z.infer<PARAMS>,
+) => FormatOutputReturn;
+
+/** Receives output where each property may still be a Promise, enabling streaming SSR / Suspense patterns. */
+export type FormatStreamOutput<PARAMS extends z.ZodType, OUT extends z.ZodType, U> = (
   data: PromisableProperties<z.infer<OUT>>,
   user: U,
   request: Request,
@@ -68,6 +77,7 @@ export type RouteWithHandler<
 > = Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT> & {
   handlerWrapped: ReqRes;
 };
+
 export type DefineType<PERMISSION, USER> = <
   METHOD extends HTTPMethods,
   PATH extends string,
@@ -78,6 +88,7 @@ export type DefineType<PERMISSION, USER> = <
   routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
   handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
   formatOutput?: FormatOutput<PARAMS, OUT, USER>,
+  formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER>,
 ) => RouteWithHandler<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>;
 
 const errorResponse =
@@ -96,6 +107,7 @@ const errorResponse =
       },
     );
   };
+
 /**
     * Wraps the handler with the necessary logic to handle the request.
     * This includes:
@@ -110,7 +122,10 @@ const errorResponse =
 
     * @param def The route definition
     * @param handler The handler function
-    * @param formatOutput The function to format the output
+    * @param formatOutput The function to format the output. Receives fully resolved data.
+    * @param formatStreamOutput Alternative to formatOutput for streaming SSR. Receives data where
+    *                           each property may still be a Promise. Per-property validation fires
+    *                           in the background as each promise resolves.
     * @param authorizer Used to check permission, it's okay to ForbiddenHttpError in case of an unauthorized used
     * @param getUserFromRequest Create a type safe user object based on the request,
                              ideally a middleware should do the authentication and populate req.user,
@@ -132,6 +147,7 @@ export const wrapHandler = <
   def: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
   handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
   formatOutput: FormatOutput<PARAMS, OUT, USER> | undefined,
+  formatStreamOutput: FormatStreamOutput<PARAMS, OUT, USER> | undefined,
   authorizer: (
     user: USER,
     permissionsNeeded: PERMISSION,
@@ -145,31 +161,28 @@ export const wrapHandler = <
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = def;
 
   const resolveAllProperties = async (obj: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const entries = Object.entries(obj);
-    const resolved = await Promise.all(entries.map(async ([k, v]) => [k, await v] as const));
+    const resolved = await Promise.all(Object.entries(obj).map(async ([k, v]) => [k, await v] as const));
     return Object.fromEntries(resolved);
   };
 
-  const hasPromiseValues = (obj: unknown): boolean =>
+  const hasPromiseValues = (obj: unknown): obj is Record<string, unknown> =>
     obj !== null &&
     typeof obj === "object" &&
     Object.values(obj as Record<string, unknown>).some((v) => v instanceof Promise);
 
-  const validatePerProperty = (obj: Record<string, unknown>, schema: OUT) => {
-    const shape = (schema as unknown as ZodObject<any>).shape;
+  const validatePerProperty = (obj: unknown) => {
+    if (obj === null || typeof obj !== "object") return;
+    const shape = (outputValidation as unknown as ZodObject<any>).shape;
     if (!shape) return;
     for (const [key, value] of Object.entries(obj)) {
-      const fieldSchema = shape[key];
+      const fieldSchema = shape[key] as z.ZodType | undefined;
       if (!fieldSchema) continue;
-      const wrap = (v: unknown) => {
-        const parsed = (fieldSchema as z.ZodType).safeParse(v);
-        if (!parsed.success) outputErrorWarning?.(parsed.error, v, method, `${key}`);
+      const warn = (v: unknown) => {
+        const parsed = fieldSchema.safeParse(v);
+        if (!parsed.success) outputErrorWarning?.(parsed.error, v, method, key);
       };
-      if (value instanceof Promise) {
-        value.then(wrap);
-      } else {
-        wrap(value);
-      }
+      if (value instanceof Promise) value.then(warn);
+      else warn(value);
     }
   };
 
@@ -179,7 +192,6 @@ export const wrapHandler = <
       user = await getUserFromRequest(req);
       const auth = await authorizer(user, permissionsNeeded, req);
       if (auth !== "ok") {
-        // Throw when the user is not authorized
         throw new Unauthorized(
           auth === "unauthorized" ? 403 : 401,
           "Missing the necessary permissions, permissions needed to visit this page: " + permissionsNeeded,
@@ -190,11 +202,10 @@ export const wrapHandler = <
       if (!queryParams.success) {
         return new Response("Path or query params did not match defined schema:" + queryParams.error, { status: 400 });
       }
+
       let result;
       const hasBody = method === "post" || method === "put" || method === "patch";
       if (hasBody) {
-        //body readable stream to string
-        //check if the body is a form data
         const contentType = req.headers.get("content-type");
         let data: any = {};
         if (contentType?.includes("form")) {
@@ -226,43 +237,40 @@ export const wrapHandler = <
         result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT>)(queryParams.data, user);
       }
 
-      if (formatOutput && hasPromiseValues(result)) {
-        // Streaming path: validate per-property in the background, pass raw promises to formatOutput
-        validatePerProperty(result, outputValidation);
-        result = await formatOutput(result, user, req, queryParams.data);
-
-        return new Response(result.data, {
-          status: (result.status ?? result.redirect) ? 303 : httpMethodSuccessCodes[method],
-          headers: result.headers,
+      if (formatStreamOutput) {
+        // Streaming path: fire-and-forget per-property validation, pass raw promises to formatStreamOutput
+        validatePerProperty(result);
+        const formatted = await formatStreamOutput(result, user, req, queryParams.data);
+        return new Response(formatted.data, {
+          status: (formatted.status ?? formatted.redirect) ? 303 : httpMethodSuccessCodes[method],
+          headers: formatted.headers,
         });
-      } else {
-        // Non-streaming path: resolve all promises first, then validate the whole object
-        if (hasPromiseValues(result)) {
-          result = await resolveAllProperties(result);
-        }
-
-        const output = outputValidation.safeParse(result);
-        if (!output.success) {
-          outputErrorWarning?.(output.error, result, method, req.url);
-        } else {
-          //If the validation was successful, use that, since zod will strip extra parameters
-          result = output.data;
-        }
-
-        if (formatOutput) {
-          result = await formatOutput(result as PromisableProperties<z.infer<OUT>>, user, req, queryParams.data);
-
-          return new Response(result.data, {
-            status: (result.status ?? result.redirect) ? 303 : httpMethodSuccessCodes[method],
-            headers: result.headers,
-          });
-        } else {
-          return new Response(JSON.stringify(result), {
-            status: httpMethodSuccessCodes[method],
-            headers: { "Content-Type": "application/json" },
-          });
-        }
       }
+
+      // Non-streaming path: resolve any promise-valued properties, then validate the whole object
+      if (hasPromiseValues(result)) {
+        result = await resolveAllProperties(result);
+      }
+      const output = outputValidation.safeParse(result);
+      if (!output.success) {
+        outputErrorWarning?.(output.error, result, method, req.url);
+      } else {
+        // If the validation was successful, use that, since zod will strip extra parameters
+        result = output.data;
+      }
+
+      if (formatOutput) {
+        const formatted = await formatOutput(result as z.infer<OUT>, user, req, queryParams.data);
+        return new Response(formatted.data, {
+          status: (formatted.status ?? formatted.redirect) ? 303 : httpMethodSuccessCodes[method],
+          headers: formatted.headers,
+        });
+      }
+
+      return new Response(JSON.stringify(result), {
+        status: httpMethodSuccessCodes[method],
+        headers: { "Content-Type": "application/json" },
+      });
     } catch (error) {
       const errorParsed = await errorParser?.(error);
       const acceptType = req.headers.get("accept") || "";
@@ -274,27 +282,22 @@ export const wrapHandler = <
         return er(errorParsed.message, errorParsed.status);
       }
       if (error instanceof NotFoundError) {
-        //TODO if output is html, reroute to 404 html
         return er("Not Found - Missing entry", 404);
       }
       if (error instanceof Unauthorized) {
         return er(error.message, error.status);
       }
-
       if (error instanceof RequestError) {
         return er(error.message, error.status);
       }
 
       let msg = "Internal Server Error";
-
       let additionalInfo = "";
       if (error && typeof error === "object" && "message" in error) {
         additionalInfo = `${error.message}`;
       }
-
       let stack;
       if (error instanceof Error) stack = error.stack;
-
       console.error(msg, req.url, additionalInfo, error);
 
       return er(VerboseErrorOutput ? { error: msg, message: additionalInfo, stack } : msg, 500);
@@ -323,6 +326,7 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
     routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
     handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
     formatOutput?: FormatOutput<PARAMS, OUT, USER>,
+    formatStreamOutput?: FormatStreamOutput<PARAMS, OUT, USER>,
   ) => {
     return {
       ...routeDef,
@@ -330,6 +334,7 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
         routeDef,
         handler,
         formatOutput,
+        formatStreamOutput,
         authorizer,
         getUserFromRequest,
         outputErrorWarning,

@@ -215,13 +215,18 @@ export const parseFieldName = (fieldName: string, fieldValue?: string | string[]
   const result: Record<string, unknown> = {};
   let current: Record<string, unknown> = result;
   for (let i = 0; i < parts.length; i++) {
-    current[parts[i]!] = isNumeric(parts[i + 1]) ? [] : {};
+    const key = parts[i]!;
+    const nextKey = parts[i + 1];
 
-    if (!parts[i + 1]) {
-      current[parts[i]!] = fieldValue;
+    if (!nextKey) {
+      current[key] = fieldValue;
       return result;
     }
-    current = current[parts[i]!];
+
+    // Record<string, unknown> cursor works for numeric keys too.
+    const child = (isNumeric(nextKey) ? [] : {}) as Record<string, unknown>;
+    current[key] = child;
+    current = child;
   }
 
   return result;

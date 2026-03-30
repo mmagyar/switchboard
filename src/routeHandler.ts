@@ -92,9 +92,9 @@ const errorResponse =
     const isHtml = contentType.includes("html") || !contentType.includes("plain");
     const messageString = isJson || typeof message === "object" ? JSON.stringify(message) : message;
     return new Response(
-      isHtml && errorHtmlFormatter ? await errorHtmlFormatter?.(status, messageString) : messageString,
+      isHtml && errorHtmlFormatter ? await errorHtmlFormatter(status, messageString) : messageString,
       {
-        status: status,
+        status,
         headers: {
           "Content-Type": isJson ? "application/json" : isHtml ? "text/html" : "text/plain",
         },
@@ -103,31 +103,31 @@ const errorResponse =
   };
 
 /**
-    * Wraps the handler with the necessary logic to handle the request.
-    * This includes:
-    * - Checking if the user has the necessary permissions
-    * - Parsing the request parameters
-    * - Validating the request parameters
-    * - Validating the request body
-    * - Running the handler
-    * - Validating the output
-    * - Formatting the output
-    * - Handling errors
-
-    * @param def The route definition
-    * @param handler The handler function
-    * @param formatOutput Formats the handler output. Receives data exactly as the handler returned it:
-    *                     plain values are plain, Promise-valued properties remain as Promises.
-    *                     Per-property validation fires in the background as each promise resolves.
-    *                     If omitted, all promises are resolved, output is validated, and JSON is returned.
-    * @param authorizer Used to check permission, it's okay to ForbiddenHttpError in case of an unauthorized used
-    * @param getUserFromRequest Create a type safe user object based on the request,
-                             ideally a middleware should do the authentication and populate req.user,
-                             But in some cases this method can be used to authenticated the request as well.
-    * @param outputErrorWarning Handle cases when the output data does not match the validation.
-                             (should be rare is type safety is kept,
-                              but there are requirements that can not be express on the type level)
-    * @returns wrapped handler
+ * Wraps the handler with the necessary logic to handle the request.
+ * This includes:
+ * - Checking if the user has the necessary permissions
+ * - Parsing the request parameters
+ * - Validating the request parameters
+ * - Validating the request body
+ * - Running the handler
+ * - Validating the output
+ * - Formatting the output
+ * - Handling errors
+ *
+ * @param def The route definition
+ * @param handler The handler function
+ * @param formatOutput Formats the handler output. Receives data exactly as the handler returned it:
+ *                     plain values are plain, Promise-valued properties remain as Promises.
+ *                     Per-property validation fires in the background as each promise resolves.
+ *                     If omitted, all promises are resolved, output is validated, and JSON is returned.
+ * @param authorizer Used to check permission, it's okay to throw Unauthorized in case of an unauthorized user
+ * @param getUserFromRequest Create a type safe user object based on the request.
+ *                           Ideally a middleware should do the authentication and populate req.user,
+ *                           but in some cases this method can be used to authenticate the request as well.
+ * @param outputErrorWarning Handle cases when the output data does not match the validation.
+ *                           (should be rare if type safety is kept,
+ *                            but there are requirements that cannot be expressed on the type level)
+ * @returns wrapped handler
  */
 export const wrapHandler = <
   USER,
@@ -213,8 +213,8 @@ export const wrapHandler = <
             }
             data[key].push(value);
           });
-          //TODO support encoded objects, use merge function
-          //Form data does not have data types, everything is a string,
+          // TODO: support encoded objects, use merge function
+          // Form data does not have data types, everything is a string,
           // so we convert data that could be a number to a number type before passing it to zod parse
           forEach(parseNumberFromForm(def.bodyValidation, data) || {}, (value, key) => (data[key] = value));
           forEach(parseBooleanFromForm(def.bodyValidation, data) || {}, (value, key) => (data[key] = value));
@@ -223,8 +223,8 @@ export const wrapHandler = <
         if (!body.success) {
           return new Response("Body does not match defined schema:" + body.error, { status: 400 });
         }
-        //The casts are not nice but there is no other way, we know the type is correct, it's enforced on calls,
-        // But TS cannot make the distinction based on the the if statement above
+        // The casts are not nice but there is no other way, we know the type is correct, it's enforced on calls,
+        // but TS cannot make the distinction based on the if statement above
         result = await (handler as HandlerWithBodyFn<USER, PARAMS, BODY, OUT>)(queryParams.data, body.data, user);
       } else {
         result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT>)(queryParams.data, user);
@@ -235,7 +235,7 @@ export const wrapHandler = <
         validatePerProperty(result);
         const formatted = await formatOutput(result as PromisableProperties<z.infer<OUT>>, user, req, queryParams.data);
         return new Response(formatted.data, {
-          status: (formatted.status ?? formatted.redirect) ? 303 : httpMethodSuccessCodes[method],
+          status: formatted.status ?? (formatted.redirect ? 303 : httpMethodSuccessCodes[method]),
           headers: formatted.headers,
         });
       }

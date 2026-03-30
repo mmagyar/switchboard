@@ -2,6 +2,9 @@ import { describe, test, expect } from "bun:test";
 import { RouteHandlerDefiner, type FormatOutput, type HandlerWithoutBodyFn } from "./routeHandler.ts";
 import { define, type UrlParamsSchema } from "./routeDef.ts";
 import { z } from "zod";
+
+export const def = define<"">();
+
 const getHandler = (
   options: { optionalQuery?: boolean; addNumber?: boolean; schema?: z.ZodTypeAny } = {
     optionalQuery: true,
@@ -51,7 +54,6 @@ const getHandler = (
     },
   );
 };
-export const def = define<"">();
 describe("RouteHandler", () => {
   describe("url param handling", () => {
     test("should return 200 status if url param is present and valid", async () => {
@@ -142,9 +144,8 @@ describe("RouteHandler", () => {
     test("you can still have dots in the object names, as long as it's not interpretable as a nested object", async () => {
       const req = new Request("https://example.com/1/?dotty.potty=helloYou");
       const res = await getHandler({ optionalQuery: true }).handlerWrapped(req);
-      const json = await res.text();
       expect(res.status).toBe(200);
-      expect(JSON.parse(json)).toEqual({
+      expect(await res.json()).toEqual({
         id: 1,
         "dotty.potty": "helloYou",
       });
@@ -166,7 +167,7 @@ describe("RouteHandler", () => {
       });
     });
 
-    test("alterantive array syntax with item index", async () => {
+    test("alternative array syntax with item index", async () => {
       const req = new Request("https://example.com/1/?name=Joe&arr.0=1&arr.1=2");
       const res = await getHandler({ optionalQuery: false }).handlerWrapped(req);
       const json = await res.text();
@@ -360,7 +361,7 @@ describe("RouteHandler", () => {
       });
 
       test("per-property validation fires outputErrorWarning for invalid async values", async () => {
-        const warnings: any[] = [];
+        const warnings: { error: z.ZodError<unknown>; data: unknown; method: string; url: string }[] = [];
         const route = makeHandler(
           () => ({
             title: "Valid",
@@ -378,14 +379,13 @@ describe("RouteHandler", () => {
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
-        // Wait a tick for the background per-property validation to fire
-        await new Promise((r) => setTimeout(r, 10));
+        // value.then(warn) is attached before formatOutput runs, so warn fires before the response resolves
         expect(warnings.length).toBeGreaterThan(0);
         expect(warnings.some((w) => w.url === "content")).toBe(true);
       });
 
       test("JSON path validates resolved values and calls outputErrorWarning on mismatch", async () => {
-        const warnings: any[] = [];
+        const warnings: { error: z.ZodError<unknown>; data: unknown; method: string; url: string }[] = [];
         const route = makeHandler(
           () => ({
             title: "Valid",
@@ -403,33 +403,26 @@ describe("RouteHandler", () => {
         expect(warnings.length).toBeGreaterThan(0);
       });
 
-      test("JSON path strips extra properties after validation when all sync", async () => {
-        const route = makeHandler(() => ({
-          title: "Hello",
-          content: "World",
-          extra: "should be stripped",
-        }));
-        const res = await route.handlerWrapped(new Request("https://example.com/1"));
-        const json = await res.json();
-        expect(json).toEqual({ title: "Hello", content: "World" });
-        expect(json.extra).toBeUndefined();
-      });
+      test("JSON path strips extra properties after zod validation", async () => {
+        const syncRoute = makeHandler(() => ({ title: "Hello", content: "World", extra: "should be stripped" }));
+        const syncJson = await syncRoute.handlerWrapped(new Request("https://example.com/1")).then((r) => r.json());
+        expect(syncJson).toEqual({ title: "Hello", content: "World" });
+        expect(syncJson.extra).toBeUndefined();
 
-      test("JSON path strips extra properties after validation when promises resolved", async () => {
-        const route = makeHandler(() => ({
+        const asyncRoute = makeHandler(() => ({
           title: Promise.resolve("Hello"),
           content: Promise.resolve("World"),
           extra: Promise.resolve("should be stripped"),
         }));
-        const res = await route.handlerWrapped(new Request("https://example.com/1"));
-        const json = await res.json();
-        expect(json).toEqual({ title: "Hello", content: "World" });
-        expect(json.extra).toBeUndefined();
+        const asyncJson = await asyncRoute.handlerWrapped(new Request("https://example.com/1")).then((r) => r.json());
+        expect(asyncJson).toEqual({ title: "Hello", content: "World" });
+        expect(asyncJson.extra).toBeUndefined();
       });
 
       describe("primitive output schemas", () => {
+        const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
+
         test("z.string() output — sync handler returns string as JSON", async () => {
-          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
           const route = handle(def.get("/:id", "", z.string()), async () => "hello");
           const res = await route.handlerWrapped(new Request("https://example.com/1"));
           expect(res.status).toBe(200);
@@ -437,7 +430,6 @@ describe("RouteHandler", () => {
         });
 
         test("z.string() output — async handler returning Promise<string>", async () => {
-          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
           const route = handle(def.get("/:id", "", z.string()), async () => Promise.resolve("hello async"));
           const res = await route.handlerWrapped(new Request("https://example.com/1"));
           expect(res.status).toBe(200);
@@ -445,25 +437,27 @@ describe("RouteHandler", () => {
         });
 
         test("z.number() output — sync handler returns number as JSON", async () => {
-          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
           const route = handle(def.get("/:id", "", z.number()), async () => 42);
           const res = await route.handlerWrapped(new Request("https://example.com/1"));
           expect(res.status).toBe(200);
           expect(await res.json()).toBe(42);
         });
 
+        test("z.boolean() output — sync handler", async () => {
+          const route = handle(def.get("/:id", "", z.boolean()), async () => true);
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          expect(await res.json()).toBe(true);
+        });
+
         test("z.string() output — formatOutput receives the plain string directly", async () => {
-          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
           let receivedData: unknown;
           const route = handle(
             def.get("/:id", "", z.string()),
             async () => "hello",
             async (data) => {
               receivedData = data;
-              return {
-                data: `<p>${data}</p>`,
-                headers: new Headers({ "Content-Type": "text/html" }),
-              };
+              return { data: `<p>${data}</p>`, headers: new Headers({ "Content-Type": "text/html" }) };
             },
           );
           const res = await route.handlerWrapped(new Request("https://example.com/1"));
@@ -471,14 +465,6 @@ describe("RouteHandler", () => {
           expect(await res.text()).toBe("<p>hello</p>");
           expect(receivedData).toBe("hello");
           expect(typeof receivedData).toBe("string");
-        });
-
-        test("z.boolean() output — sync handler", async () => {
-          const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
-          const route = handle(def.get("/:id", "", z.boolean()), async () => true);
-          const res = await route.handlerWrapped(new Request("https://example.com/1"));
-          expect(res.status).toBe(200);
-          expect(await res.json()).toBe(true);
         });
       });
     });

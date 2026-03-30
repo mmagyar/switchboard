@@ -18,7 +18,7 @@ A type-safe router for Bun with Zod validation, permission handling, and streami
 ### 1. Set up the definer
 
 ```typescript
-import { define, RouteHandlerDefiner, Router, serveHotBuns } from "switchboard";
+import { define, RouteHandlerDefiner, Router, serveHotBuns } from "switchboard/server";
 import z from "zod";
 
 export type PermissionsType = "public" | "private";
@@ -28,8 +28,8 @@ export const def = define<PermissionsType>();
 
 export const handle = RouteHandlerDefiner<User, PermissionsType>(
   async (_user, permissionsNeeded, _req) => {
-    // Return "ok", "unauthorized", or "unauthenticated"
-    return permissionsNeeded === "public" ? "ok" : "unauthorized";
+    // Return "ok", "forbidden", or "unauthenticated"
+    return permissionsNeeded === "public" ? "ok" : "forbidden";
   },
   async (_req): Promise<User> => {
     // Resolve the user from the request (JWT, session, etc.)
@@ -56,6 +56,9 @@ export const handle = RouteHandlerDefiner<User, PermissionsType>(
 
 ### 2. Define routes
 
+For **bodyless** methods (`get`, `delete`, etc.) the handler signature is `(params, user)`.
+For **body** methods (`post`, `put`, `patch`) the handler signature is `(params, body, user)`.
+
 ```typescript
 const listRoute = def.get(
   "/orders",
@@ -64,7 +67,7 @@ const listRoute = def.get(
   z.object({ search: z.string().optional() }),
 );
 
-export const listHandler = handle(listRoute, async ({ search }) => {
+export const listHandler = handle(listRoute, async ({ search }, user) => {
   return { orders: search ? ["burger"] : ["burger", "fries"] };
 });
 
@@ -75,7 +78,8 @@ const createRoute = def.post(
   z.object({ id: z.number() }),           // output schema
 );
 
-export const createHandler = handle(createRoute, async (_params, body) => {
+// post/put/patch: (params, body, user)
+export const createHandler = handle(createRoute, async (_params, body, user) => {
   return { id: 42 };
 });
 ```
@@ -132,7 +136,7 @@ Creates a `handle` function bound to your auth and user-resolution logic.
 
 | Parameter | Type | Description |
 |---|---|---|
-| `authorizer` | `(user, permissionsNeeded, req) => Promise<"ok" \| "unauthorized" \| "unauthenticated">` | Checks whether the resolved user may access the route |
+| `authorizer` | `(user, permissionsNeeded, req) => Promise<"ok" \| "forbidden" \| "unauthenticated">` | Checks whether the resolved user may access the route |
 | `getUserFromRequest` | `(req) => Promise<USER>` | Resolves the current user from the request |
 | `options` | `RouteHandlerOptions<USER>` | Optional callbacks — see below |
 
@@ -156,16 +160,13 @@ Switchboard exports three error classes that handlers can throw directly. When o
 | Class | Constructor | Status | Response body |
 |---|---|---|---|
 | `NotFoundError` | `new NotFoundError()` | `404` | `"Not Found - Missing entry"` |
-| `Unauthorized` | `new Unauthorized(status?, message?)` | `401` or `403` | The `message` argument (default varies) |
+| `Unauthorized` | `new Unauthorized(status?, message?)` | `401` or `403` | The `message` argument (defaults to `"Unauthorized"`) |
 | `RequestError` | `new RequestError(status, message)` | Any | The `message` argument |
 
 ```typescript
-import { NotFoundError, Unauthorized, RequestError } from "switchboard";
+import { NotFoundError, Unauthorized, RequestError } from "switchboard/server";
 
-handle(def.get("/items/:id", "public", outputSchema), async ({ id }, user) => {
-  if (!user) throw new Unauthorized(401, "Login required");
-  if (!user.isAdmin) throw new Unauthorized(403, "Admins only");
-
+handle(def.get("/items/:id", "public", outputSchema), async ({ id }) => {
   const item = await db.findItem(id);
   if (!item) throw new NotFoundError();
 
@@ -185,6 +186,9 @@ If you supply an `errorParser` in `RouteHandlerOptions`, it runs **before** thes
 
 Binds a handler function to a route definition.
 
+- For **bodyless** methods (`get`, `delete`, etc.) the handler signature is `(params, user)`.
+- For **body** methods (`post`, `put`, `patch`) the handler signature is `(params, body, user)`.
+
 ```typescript
 const myRoute = handle(
   def.get("/items/:id", "public", outputSchema),
@@ -197,6 +201,17 @@ const myRoute = handle(
   },
 );
 ```
+
+#### `formatOutput` return shape
+
+The object returned by `formatOutput` has the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `data` | `BodyInit \| undefined` | The response body |
+| `headers` | `Headers` | Response headers (e.g. `Content-Type`) |
+| `redirect` | `true \| undefined` | When set, the response status defaults to `303 See Other` |
+| `status` | `number \| undefined` | Explicit status code; takes priority over the `redirect` default and the method default |
 
 #### Promisable handler returns
 
@@ -263,10 +278,11 @@ Auth is only applied when `authTokenOverride` is explicitly set to a non-null st
 
 ## Path parameter conventions
 
-Path segments starting with `:` are extracted as route parameters. Segments ending in `Id` are parsed as numbers; all others are kept as strings.
+Path segments starting with `:` are extracted as route parameters. Segments ending in `Id` (camelCase) or `_id` (snake_case) are parsed as numbers; all others are kept as strings.
 
 ```
 /orders/:orderId          → { orderId: z.number() }
+/orders/:order_id         → { order_id: z.number() }
 /users/:username          → { username: z.string() }
 /items/:itemId?           → { itemId: z.optional(z.number()) }
 ```
@@ -289,3 +305,19 @@ Bun ships two routing facilities that were considered:
 - **`routes` option of `Bun.serve`** — pattern matching is baked into the server instance itself and cannot be used as a standalone path-matching primitive outside of a `Bun.serve` call.
 
 Neither can be used as a drop-in path matcher decoupled from a specific server setup, so the trie implementation is used instead. It provides the same O(segments) performance with no external dependencies.
+
+---
+
+## Known Limitations
+
+- **Form body nested objects**: POST/PUT/PATCH bodies sent as `application/x-www-form-urlencoded` with dot-notation keys (e.g. `address.city=London`) are not parsed into nested objects — only query params support this. Use `application/json` bodies if nesting is needed.
+
+- **Route parser types**: The form/query string parser (`routeParser.ts`) uses several internal `any` casts; type safety there is weaker than the rest of the library.
+
+- **Union schema edge case**: When a `ZodUnion` contains both a `string` member and a type that can be parsed from a string, the parser may coerce the string value, potentially invalidating it.
+
+- **`defToUrl` empty arrays**: Serialising a parameter whose value is an empty array omits the key entirely from the URL rather than preserving an explicit empty state.
+
+- **TLS cert domain change**: The auto-generated self-signed cert (`"generate"` option) is cached in `.genCert`. If the domain name changes, delete that file manually to force regeneration.
+
+- **Query string type-level validation**: The `ValidateOptionalUrl` type constraint only validates path segment syntax. It does not validate query string parameter definitions at the type level.

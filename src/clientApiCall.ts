@@ -11,6 +11,12 @@ export const setBaseUrl = (baseUrl: string) => {
   callConfig.baseUrl = baseUrl;
 };
 
+let clientConfig: { onUnauthorized?: () => void } = {};
+
+export const configureClient = (options: { onUnauthorized?: () => void }): void => {
+  clientConfig = { ...clientConfig, ...options };
+};
+
 export const call = async <
   METHOD extends HTTPMethods,
   PATH extends string,
@@ -41,19 +47,15 @@ export const call = async <
     method: settings?.methodOverride ?? route.method.toUpperCase(),
     headers: {
       ...auth,
-      "Content-Type": "application/json",
+      ...(body ? { "Content-Type": "application/json" } : {}),
       Accept: "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
     credentials: settings.withCredentials ? "include" : undefined,
   }).then(async (response) => {
     if (response.status >= 400) {
-      if (
-        response.status === 401 &&
-        !location.pathname.startsWith("/login") &&
-        !location.pathname.startsWith("/auth")
-      ) {
-        //       Redirect to authorize Revise / test if it causes a problem
+      if (response.status === 401) {
+        clientConfig.onUnauthorized?.();
       }
       const errDefault = `Unknown error, status: ${response.status}`;
       let err = errDefault;

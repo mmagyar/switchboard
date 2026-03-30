@@ -2,25 +2,6 @@ import type { ValidateOptionalUrl } from "./urlType.ts";
 import { parseHTTPMethod, type HTTPMethods } from "./staticDefs.ts";
 import { checkRouteOptionalParameterOrder, decomposeUrl } from "./urlUtils.ts";
 
-export const matchRoute = (route: string, path: URL): boolean => {
-  const routeParts = decomposeUrl(route);
-  const pathParts = decomposeUrl(path.pathname);
-
-  //TODO precompute this
-  const partsMin = routeParts.filter((x) => !x.endsWith("?")).length;
-  const partsMax = routeParts.length;
-  const pathPartCount = pathParts.length;
-  if (partsMin > pathPartCount || partsMax < pathPartCount) return false;
-
-  for (let i = 0; i < routeParts.length; i++) {
-    if (routeParts[i] === pathParts[i]) continue;
-    if (routeParts[i]?.startsWith(":")) continue;
-    return false;
-  }
-
-  return true;
-};
-
 type StoredRoute = {
   method: HTTPMethods;
   route: string;

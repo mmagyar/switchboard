@@ -156,7 +156,7 @@ export const wrapHandler = <
     user: USER,
     permissionsNeeded: PERMISSION,
     req: Request,
-  ) => Promise<"ok" | "unauthorized" | "unauthenticated">,
+  ) => Promise<"ok" | "forbidden" | "unauthenticated">,
   getUserFromRequest: (req: Request) => Promise<USER>,
   outputErrorWarning?: (error: ZodError<unknown>, data: unknown, method: string, url: string) => void,
   errorParser?: (error: unknown) => Promise<{ status: number; message: string } | undefined>,
@@ -165,7 +165,7 @@ export const wrapHandler = <
 ): ReqRes => {
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = def;
 
-  const validatePerProperty = (obj: unknown) => {
+  const validatePerProperty = (obj: unknown, reqUrl: string) => {
     if (obj === null || typeof obj !== "object") return;
     if (!(outputValidation instanceof ZodObject)) return;
     const shape = outputValidation.shape;
@@ -174,7 +174,7 @@ export const wrapHandler = <
       if (!fieldSchema) continue;
       const warn = (v: unknown) => {
         const parsed = fieldSchema.safeParse(v);
-        if (!parsed.success) outputErrorWarning?.(parsed.error, v, method, key);
+        if (!parsed.success) outputErrorWarning?.(parsed.error, v, method, reqUrl + "#" + key);
       };
       if (value instanceof Promise) void value.then(warn).catch(() => undefined);
       else warn(value);
@@ -183,19 +183,29 @@ export const wrapHandler = <
 
   return async (req: Request): Promise<Response> => {
     let user: USER | undefined;
+    const acceptType = req.headers.get("accept") || "";
+    const er = (message: string | object, status: number) =>
+      errorResponse(acceptType, errorHtmlFormatter ? (s, m) => errorHtmlFormatter(s, m, req, user) : undefined)(
+        message,
+        status,
+      );
     try {
       user = await getUserFromRequest(req);
       const auth = await authorizer(user, permissionsNeeded, req);
       if (auth !== "ok") {
         throw new Unauthorized(
-          auth === "unauthorized" ? 403 : 401,
-          "Missing the necessary permissions, permissions needed to visit this page: " + permissionsNeeded,
+          auth === "forbidden" ? 403 : 401,
+          VerboseErrorOutput
+            ? "Missing the necessary permissions: " + String(permissionsNeeded)
+            : auth === "forbidden"
+              ? "Forbidden"
+              : "Unauthorized",
         );
       }
       const url = new URL(req.url);
       const queryParams = parseUrl(url, path, paramsValidation);
       if (!queryParams.success) {
-        return new Response("Path or query params did not match defined schema:" + queryParams.error, { status: 400 });
+        return er("Path or query params did not match defined schema: " + queryParams.error.message, 400);
       }
 
       let result;
@@ -213,7 +223,6 @@ export const wrapHandler = <
             const existing = data[key];
             data[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
           });
-          // TODO: support encoded objects, use merge function
           // Form data does not have data types, everything is a string,
           // so we convert data that could be a number to a number type before passing it to zod parse
           forEach(parseNumberFromForm(def.bodyValidation, data) || {}, (value, key) => (data[key] = value));
@@ -229,7 +238,7 @@ export const wrapHandler = <
         }
         const body = def.bodyValidation.safeParse(data);
         if (!body.success) {
-          return new Response("Body does not match defined schema:" + body.error, { status: 400 });
+          return er("Body does not match defined schema: " + body.error.message, 400);
         }
         // The casts are not nice but there is no other way, we know the type is correct, it's enforced on calls,
         // but TS cannot make the distinction based on the if statement above
@@ -240,7 +249,7 @@ export const wrapHandler = <
 
       if (formatOutput) {
         // Format path: pass data as-is, validate each property in the background as it resolves
-        validatePerProperty(result);
+        validatePerProperty(result, req.url);
         const formatted = await formatOutput(result as PromisableProperties<z.infer<OUT>>, user, req, queryParams.data);
         return new Response(formatted.data, {
           status: formatted.status ?? (formatted.redirect ? 303 : httpMethodSuccessCodes[method]),
@@ -265,11 +274,6 @@ export const wrapHandler = <
       });
     } catch (error) {
       const errorParsed = await errorParser?.(error);
-      const acceptType = req.headers.get("accept") || "";
-      const er = errorResponse(
-        acceptType,
-        errorHtmlFormatter ? (status, message) => errorHtmlFormatter(status, message, req, user) : undefined,
-      );
       if (errorParsed) {
         return er(errorParsed.message, errorParsed.status);
       }
@@ -309,7 +313,7 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
     user: USER,
     permissionsNeeded: PERMISSION,
     req: Request,
-  ) => Promise<"ok" | "unauthorized" | "unauthenticated">,
+  ) => Promise<"ok" | "forbidden" | "unauthenticated">,
   getUserFromRequest: (req: Request) => Promise<USER>,
   options?: RouteHandlerOptions<USER>,
 ): DefineType<PERMISSION, USER> => {

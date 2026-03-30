@@ -20,7 +20,7 @@ export type HTTPMethodsWithBody = keyof typeof httpMethodWithBodySuccessCodes;
 export type HTTPMethodsWithoutBody = keyof typeof httpMethodWithoutBodySuccessCodes;
 export type HTTPMethods = keyof typeof httpMethodSuccessCodes;
 export const parseHTTPMethod = (methodIn: string): HTTPMethods => {
-  const method = methodIn.toLowerCase() as HTTPMethods;
+  const method = methodIn.toLowerCase();
   if (method in httpMethodSuccessCodes) return method as HTTPMethods;
   throw new Error(`Invalid HTTP method: ${method}`);
 };

@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { RouteHandlerDefiner } from "./routeHandler.ts";
 import { define } from "./routeDef.ts";
 import { z } from "zod";
-import { NotFoundError, RequestError } from "./staticDefs.ts";
+import { NotFoundError, RequestError, Unauthorized } from "./staticDefs.ts";
 
 export const def = define<"">();
 
@@ -375,7 +375,7 @@ describe("RouteHandler", () => {
         expect(res.status).toBe(200);
         // value.then(warn) is attached before formatOutput runs, so warn fires before the response resolves
         expect(warnings.length).toBeGreaterThan(0);
-        expect(warnings.some((w) => w.url === "content")).toBe(true);
+        expect(warnings.some((w) => w.url.endsWith("#content"))).toBe(true);
       });
 
       test("JSON path validates resolved values and calls outputErrorWarning on mismatch", async () => {
@@ -523,9 +523,9 @@ describe("RouteHandler", () => {
   });
 
   describe("auth and permissions", () => {
-    test("returns 403 when authorizer returns 'unauthorized'", async () => {
+    test("returns 403 when authorizer returns 'forbidden'", async () => {
       const handle = RouteHandlerDefiner(
-        async () => "unauthorized",
+        async () => "forbidden",
         async () => ({}),
       );
       const route = handle(def.get("/:id", "", z.object({ id: z.string() })), (params) => ({ id: params.id }));
@@ -702,6 +702,126 @@ describe("RouteHandler", () => {
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(410);
         expect(await res.text()).toContain("gone, overridden by parser");
+      });
+    });
+
+    describe("errorHtmlFormatter", () => {
+      test("500 with HTML Accept → formatter output is the body, Content-Type is text/html", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorLogger: () => {},
+            errorHtmlFormatter: async (_status, _message) => "<h1>Custom 500</h1>",
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new Error("something went wrong");
+        });
+        const res = await route.handlerWrapped(
+          new Request("https://example.com/1", { headers: { Accept: "text/html" } }),
+        );
+        expect(res.status).toBe(500);
+        expect(await res.text()).toBe("<h1>Custom 500</h1>");
+        expect(res.headers.get("Content-Type")).toBe("text/html");
+      });
+
+      test("404 (NotFoundError) with HTML Accept → formatter is called", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorHtmlFormatter: async (_status, _message) => "<h1>Not Found</h1>",
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new NotFoundError();
+        });
+        const res = await route.handlerWrapped(
+          new Request("https://example.com/1", { headers: { Accept: "text/html" } }),
+        );
+        expect(res.status).toBe(404);
+        expect(await res.text()).toBe("<h1>Not Found</h1>");
+      });
+
+      test("403 (Unauthorized) with HTML Accept → formatter is called", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorHtmlFormatter: async (_status, _message) => "<h1>Forbidden</h1>",
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new Unauthorized(403, "No access");
+        });
+        const res = await route.handlerWrapped(
+          new Request("https://example.com/1", { headers: { Accept: "text/html" } }),
+        );
+        expect(res.status).toBe(403);
+        expect(await res.text()).toBe("<h1>Forbidden</h1>");
+      });
+
+      test("400 param validation error with HTML Accept → formatter is called", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorHtmlFormatter: async (_status, _message) => "<h1>Bad Request</h1>",
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({}), z.object({ id: z.number() })), async () => ({}));
+        const res = await route.handlerWrapped(
+          new Request("https://example.com/not-a-number", { headers: { Accept: "text/html" } }),
+        );
+        expect(res.status).toBe(400);
+        expect(await res.text()).toBe("<h1>Bad Request</h1>");
+      });
+
+      test("JSON Accept → formatter is NOT called, error returned as JSON", async () => {
+        let formatterCalled = false;
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorLogger: () => {},
+            errorHtmlFormatter: async (_status, _message) => {
+              formatterCalled = true;
+              return "<h1>Error</h1>";
+            },
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new Error("something went wrong");
+        });
+        const res = await route.handlerWrapped(
+          new Request("https://example.com/1", { headers: { Accept: "application/json" } }),
+        );
+        expect(formatterCalled).toBe(false);
+        expect(res.status).toBe(500);
+        expect(await res.json()).toBeDefined();
+      });
+
+      test("formatter receives the correct user argument", async () => {
+        let capturedUser: { name: string } | undefined;
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({ name: "Alice" }),
+          {
+            errorHtmlFormatter: async (_status, _message, _request, user) => {
+              capturedUser = user;
+              return "<h1>Not Found</h1>";
+            },
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new NotFoundError();
+        });
+        const res = await route.handlerWrapped(
+          new Request("https://example.com/1", { headers: { Accept: "text/html" } }),
+        );
+        expect(res.status).toBe(404);
+        expect(capturedUser?.name).toBe("Alice");
       });
     });
   });

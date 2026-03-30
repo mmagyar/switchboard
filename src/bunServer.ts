@@ -1,10 +1,8 @@
 import type { ServerWebSocket } from "bun";
 import type { Router } from "./index.ts";
-import { VerboseErrorOutput } from "./env.ts";
 
 /* Allow using ssl for local development without any complicated workarounds
  * Since this cert will not be validated by a CA you'll need to bypass that warning message
- * TODO domain is not validated, so if it changes it will stilluse the file, so delete it manually
  */
 const genCert = async (domain: string = "localhost") => {
   //save cert so it does not change between runs, triggering the warning, since it's not a "validated" cert
@@ -105,7 +103,7 @@ export const serveHotBuns = async (
     idleTimeout: 10,
     //generate new CA with openssl on the fly
     tls: ssl,
-    fetch: async (req): Promise<Response> => {
+    fetch: async (req): Promise<Response | undefined> => {
       const url = req.url;
       const method = req.method;
       const success = server.upgrade(req);
@@ -113,7 +111,7 @@ export const serveHotBuns = async (
         // Bun automatically returns a 101 Switching Protocols
         // if the upgrade succeeds
         console.info(`${method} ${url} 101 Websocket`);
-        return undefined as any;
+        return undefined;
       }
       let res;
       let startTime = performance.now();
@@ -125,10 +123,10 @@ export const serveHotBuns = async (
     },
     websocket: {
       async message(ws, _message) {
-        if (VerboseErrorOutput && readLogs) ws.send(await readLogs());
+        if (readLogs) ws.send(await readLogs());
       }, // a message is received
       open(ws) {
-        if (VerboseErrorOutput && readLogs && watchLogs) {
+        if (readLogs && watchLogs) {
           wsc.push(ws);
           watchLogs(async () => {
             ws.send(await readLogs());

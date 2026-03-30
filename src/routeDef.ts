@@ -90,7 +90,7 @@ export const define = <PERMISSION>() => {
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
-      paramsValidation: PARAMS,
+      paramsValidation?: PARAMS,
     ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       return {

@@ -101,9 +101,9 @@ export const objectToArray = <T extends Record<any, any>, OUT, FILTER extends bo
   return result as FILTER extends true ? ExcludeUndefined<OUT>[] : OUT[];
 };
 
-export const deepFreeze = <T>(o: T): T => {
+export const deepFreeze = <T extends object>(o: T): T => {
   Object.entries(o).forEach(([key, value]) => {
-    o[key] = value && typeof value === "object" ? deepFreeze(value) : value;
+    (o as Record<string, unknown>)[key] = value && typeof value === "object" ? deepFreeze(value as object) : value;
   });
   return Object.freeze(o);
 };

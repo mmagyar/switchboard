@@ -149,6 +149,38 @@ type RouteHandlerOptions<USER> = {
 
 ---
 
+### Built-in error classes
+
+Switchboard exports three error classes that handlers can throw directly. When one of these is thrown, switchboard automatically produces the correct HTTP response — no `errorParser` needed.
+
+| Class | Constructor | Status | Response body |
+|---|---|---|---|
+| `NotFoundError` | `new NotFoundError()` | `404` | `"Not Found - Missing entry"` |
+| `Unauthorized` | `new Unauthorized(status?, message?)` | `401` or `403` | The `message` argument (default varies) |
+| `RequestError` | `new RequestError(status, message)` | Any | The `message` argument |
+
+```typescript
+import { NotFoundError, Unauthorized, RequestError } from "switchboard";
+
+handle(def.get("/items/:id", "public", outputSchema), async ({ id }, user) => {
+  if (!user) throw new Unauthorized(401, "Login required");
+  if (!user.isAdmin) throw new Unauthorized(403, "Admins only");
+
+  const item = await db.findItem(id);
+  if (!item) throw new NotFoundError();
+
+  if (!item.isPublished) throw new RequestError(422, "Item is not published yet");
+
+  return item;
+});
+```
+
+Anything that is not one of these three classes falls through to a generic `500 Internal Server Error`.
+
+If you supply an `errorParser` in `RouteHandlerOptions`, it runs **before** these checks and can override any of them — return `{ status, message }` from it to short-circuit the built-in handling.
+
+---
+
 ### `handle(routeDef, handler, formatOutput?)`
 
 Binds a handler function to a route definition.
@@ -257,10 +289,3 @@ Bun ships two routing facilities that were considered:
 - **`routes` option of `Bun.serve`** — pattern matching is baked into the server instance itself and cannot be used as a standalone path-matching primitive outside of a `Bun.serve` call.
 
 Neither can be used as a drop-in path matcher decoupled from a specific server setup, so the trie implementation is used instead. It provides the same O(segments) performance with no external dependencies.
-
----
-
-## TODO
-
-- Router — validate that path params in the template are present in the params schema
-- More flexible error response formatting

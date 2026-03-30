@@ -642,5 +642,67 @@ describe("RouteHandler", () => {
       const res = await route.handlerWrapped(new Request("https://example.com/1"));
       expect(res.status).toBe(500);
     });
+
+    describe("errorParser", () => {
+      test("uses status and message from errorParser when it returns a value", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorLogger: () => {},
+            errorParser: async (error) => {
+              if (error instanceof RangeError) {
+                return { status: 400, message: "range error caught by parser" };
+              }
+              return undefined;
+            },
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new RangeError("out of range");
+        });
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(400);
+        expect(await res.text()).toContain("range error caught by parser");
+      });
+
+      test("falls through to built-in NotFoundError handler when errorParser returns undefined", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorLogger: () => {},
+            errorParser: async (_error) => undefined,
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new NotFoundError();
+        });
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(404);
+      });
+
+      test("errorParser overrides built-in NotFoundError handler when it returns a value", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorLogger: () => {},
+            errorParser: async (error) => {
+              if (error instanceof NotFoundError) {
+                return { status: 410, message: "gone, overridden by parser" };
+              }
+              return undefined;
+            },
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new NotFoundError();
+        });
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(410);
+        expect(await res.text()).toContain("gone, overridden by parser");
+      });
+    });
   });
 });

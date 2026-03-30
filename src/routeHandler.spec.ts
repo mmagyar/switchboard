@@ -1,7 +1,8 @@
-import { describe, test, expect } from "bun:test";
-import { RouteHandlerDefiner, type FormatOutput, type HandlerWithoutBodyFn } from "./routeHandler.ts";
-import { define, type UrlParamsSchema } from "./routeDef.ts";
+import { describe, test, expect, spyOn } from "bun:test";
+import { RouteHandlerDefiner } from "./routeHandler.ts";
+import { define } from "./routeDef.ts";
 import { z } from "zod";
+import { NotFoundError, RequestError } from "./staticDefs.ts";
 
 export const def = define<"">();
 
@@ -54,6 +55,7 @@ const getHandler = (
     },
   );
 };
+
 describe("RouteHandler", () => {
   describe("url param handling", () => {
     test("should return 200 status if url param is present and valid", async () => {
@@ -79,6 +81,7 @@ describe("RouteHandler", () => {
       expect(res.status).toBe(400);
     });
   });
+
   describe("query param handling", () => {
     test("should return 200 status if query param is present and valid", async () => {
       const req = new Request("https://example.com/1/?name=Joe");
@@ -129,6 +132,7 @@ describe("RouteHandler", () => {
         obj: { key: "value", value: { name: "deep", age: 35 } },
       });
     });
+
     test("can handle boolean values in objects in the query params", async () => {
       const req = new Request("https://example.com/1/?name=Joe&obj.key=value&obj.booboo=true");
       const res = await getHandler({ optionalQuery: false }).handlerWrapped(req);
@@ -212,31 +216,20 @@ describe("RouteHandler", () => {
 
     describe("promisable properties", () => {
       const outputSchema = z.object({ title: z.string(), content: z.string() });
-
-      const makeHandler = <HANDLER extends HandlerWithoutBodyFn<{}, UrlParamsSchema<"/:id">, typeof outputSchema>>(
-        handler: HANDLER,
-        opts?: {
-          formatOutput?: FormatOutput<UrlParamsSchema<"/:id">, typeof outputSchema, {}, Awaited<ReturnType<HANDLER>>>;
-          outputErrorWarning?: (error: z.ZodError<unknown>, data: unknown, method: string, url: string) => void;
-        },
-      ) => {
-        const handle = RouteHandlerDefiner(
-          async () => "ok",
-          async () => ({}),
-          opts?.outputErrorWarning,
-        );
-        return handle(def.get("/:id", "", outputSchema), handler, opts?.formatOutput);
-      };
+      const handle = RouteHandlerDefiner(
+        async () => "ok",
+        async () => ({}),
+      );
 
       test("sync handler still returns JSON as before", async () => {
-        const route = makeHandler(() => ({ title: "Hello", content: "World" }));
+        const route = handle(def.get("/:id", "", outputSchema), () => ({ title: "Hello", content: "World" }));
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
         expect(await res.json()).toEqual({ title: "Hello", content: "World" });
       });
 
       test("handler with promise properties resolves all for JSON response", async () => {
-        const route = makeHandler(() => ({
+        const route = handle(def.get("/:id", "", outputSchema), () => ({
           title: "Hello",
           content: Promise.resolve("Async World"),
         }));
@@ -246,7 +239,7 @@ describe("RouteHandler", () => {
       });
 
       test("handler with all promise properties resolves for JSON response", async () => {
-        const route = makeHandler(() => ({
+        const route = handle(def.get("/:id", "", outputSchema), () => ({
           title: Promise.resolve("Async Hello"),
           content: Promise.resolve("Async World"),
         }));
@@ -256,7 +249,7 @@ describe("RouteHandler", () => {
       });
 
       test("async handler returning promise properties resolves for JSON response", async () => {
-        const route = makeHandler(async () => ({
+        const route = handle(def.get("/:id", "", outputSchema), async () => ({
           title: "Hello",
           content: Promise.resolve("Async World"),
         }));
@@ -267,21 +260,20 @@ describe("RouteHandler", () => {
 
       test("formatOutput receives raw promises when handler returns promise properties", async () => {
         let receivedData!: { title: string; content: Promise<string> };
-        const route = makeHandler(
+        const route = handle(
+          def.get("/:id", "", outputSchema),
           () => ({
             title: "Hello",
             content: Promise.resolve("Async World"),
           }),
-          {
-            formatOutput: async (data, _user, _req, _params) => {
-              receivedData = data;
-              // TypeScript knows data.title is `string` — no await needed
-              // TypeScript knows data.content is `Promise<string>` — must await
-              return {
-                data: JSON.stringify({ title: data.title, content: await data.content }),
-                headers: new Headers({ "Content-Type": "application/json" }),
-              };
-            },
+          async (data, _user, _req, _params) => {
+            receivedData = data;
+            // TypeScript knows data.title is `string` — no await needed
+            // TypeScript knows data.content is `Promise<string>` — must await
+            return {
+              data: JSON.stringify({ title: data.title, content: await data.content }),
+              headers: new Headers({ "Content-Type": "application/json" }),
+            };
           },
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
@@ -293,39 +285,40 @@ describe("RouteHandler", () => {
       });
 
       test("formatOutput with sync data — data properties are plain values, no await needed", async () => {
-        const route = makeHandler(() => ({ title: "Hello", content: "World" }), {
-          formatOutput: (data, _user, _req, _params) => ({
+        const route = handle(
+          def.get("/:id", "", outputSchema),
+          () => ({ title: "Hello", content: "World" }),
+          (data, _user, _req, _params) => ({
             // data.title and data.content are string — no await needed
             data: `<h1>${data.title}</h1><p>${data.content}</p>`,
             headers: new Headers({ "Content-Type": "text/html" }),
           }),
-        });
+        );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
         expect(await res.text()).toBe("<h1>Hello</h1><p>World</p>");
       });
 
       test("formatOutput knows exact types — plain string properties need no await", async () => {
-        const route = makeHandler(
+        const route = handle(
+          def.get("/:id", "", outputSchema),
           () => ({
             title: "Hello",
             content: Promise.resolve("Async World"),
           }),
-          {
-            formatOutput: (data) => {
-              // data.title is exactly `string` — calling string methods directly is valid
-              const shout: string = data.title.toUpperCase();
-              // data.content is exactly `Promise<string>` — it cannot be used as a plain string
-              const contentIsPromise: Promise<string> = data.content;
-              const stream = new ReadableStream({
-                async start(controller) {
-                  controller.enqueue(shout);
-                  controller.enqueue(await contentIsPromise);
-                  controller.close();
-                },
-              });
-              return { data: stream, headers: new Headers({ "Content-Type": "text/plain" }) };
-            },
+          (data) => {
+            // data.title is exactly `string` — calling string methods directly is valid
+            const shout: string = data.title.toUpperCase();
+            // data.content is exactly `Promise<string>` — it cannot be used as a plain string
+            const contentIsPromise: Promise<string> = data.content;
+            const stream = new ReadableStream({
+              async start(controller) {
+                controller.enqueue(shout);
+                controller.enqueue(await contentIsPromise);
+                controller.close();
+              },
+            });
+            return { data: stream, headers: new Headers({ "Content-Type": "text/plain" }) };
           },
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
@@ -333,26 +326,25 @@ describe("RouteHandler", () => {
       });
 
       test("formatOutput can produce a ReadableStream for streaming SSR", async () => {
-        const route = makeHandler(
+        const route = handle(
+          def.get("/:id", "", outputSchema),
           () => ({
             title: "Hello",
             content: new Promise<string>((resolve) => setTimeout(() => resolve("Streamed!"), 10)),
           }),
-          {
-            formatOutput: (data, _user, _req, _params) => {
-              const stream = new ReadableStream({
-                async start(controller) {
-                  controller.enqueue(`<h1>${data.title}</h1>`);
-                  const content = await data.content;
-                  controller.enqueue(`<p>${content}</p>`);
-                  controller.close();
-                },
-              });
-              return {
-                data: stream,
-                headers: new Headers({ "Content-Type": "text/html" }),
-              };
-            },
+          (data, _user, _req, _params) => {
+            const stream = new ReadableStream({
+              async start(controller) {
+                controller.enqueue(`<h1>${data.title}</h1>`);
+                const content = await data.content;
+                controller.enqueue(`<p>${content}</p>`);
+                controller.close();
+              },
+            });
+            return {
+              data: stream,
+              headers: new Headers({ "Content-Type": "text/html" }),
+            };
           },
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
@@ -362,20 +354,21 @@ describe("RouteHandler", () => {
 
       test("per-property validation fires outputErrorWarning for invalid async values", async () => {
         const warnings: { error: z.ZodError<unknown>; data: unknown; method: string; url: string }[] = [];
-        const route = makeHandler(
+        const handleWithWarning = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          (error, data, method, url) => warnings.push({ error, data, method, url }),
+        );
+        const route = handleWithWarning(
+          def.get("/:id", "", outputSchema),
           () => ({
             title: "Valid",
             content: Promise.resolve(12345 as unknown as string), // intentionally wrong type to test validation
           }),
-          {
-            outputErrorWarning: (error, data, method, url) => {
-              warnings.push({ error, data, method, url });
-            },
-            formatOutput: async (data, _user, _req, _params) => ({
-              data: JSON.stringify({ title: data.title, content: await data.content }),
-              headers: new Headers({ "Content-Type": "application/json" }),
-            }),
-          },
+          async (data, _user, _req, _params) => ({
+            data: JSON.stringify({ title: data.title, content: await data.content }),
+            headers: new Headers({ "Content-Type": "application/json" }),
+          }),
         );
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
@@ -386,17 +379,15 @@ describe("RouteHandler", () => {
 
       test("JSON path validates resolved values and calls outputErrorWarning on mismatch", async () => {
         const warnings: { error: z.ZodError<unknown>; data: unknown; method: string; url: string }[] = [];
-        const route = makeHandler(
-          () => ({
-            title: "Valid",
-            content: Promise.resolve(999 as unknown as string), // intentionally wrong type to test validation
-          }),
-          {
-            outputErrorWarning: (error, data, method, url) => {
-              warnings.push({ error, data, method, url });
-            },
-          },
+        const handleWithWarning = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          (error, data, method, url) => warnings.push({ error, data, method, url }),
         );
+        const route = handleWithWarning(def.get("/:id", "", outputSchema), () => ({
+          title: "Valid",
+          content: Promise.resolve(999 as unknown as string), // intentionally wrong type to test validation
+        }));
         const res = await route.handlerWrapped(new Request("https://example.com/1"));
         expect(res.status).toBe(200);
         // Full-object validation fires on the resolved result
@@ -404,12 +395,16 @@ describe("RouteHandler", () => {
       });
 
       test("JSON path strips extra properties after zod validation", async () => {
-        const syncRoute = makeHandler(() => ({ title: "Hello", content: "World", extra: "should be stripped" }));
+        const syncRoute = handle(def.get("/:id", "", outputSchema), () => ({
+          title: "Hello",
+          content: "World",
+          extra: "should be stripped",
+        }));
         const syncJson = await syncRoute.handlerWrapped(new Request("https://example.com/1")).then((r) => r.json());
         expect(syncJson).toEqual({ title: "Hello", content: "World" });
         expect(syncJson.extra).toBeUndefined();
 
-        const asyncRoute = makeHandler(() => ({
+        const asyncRoute = handle(def.get("/:id", "", outputSchema), () => ({
           title: Promise.resolve("Hello"),
           content: Promise.resolve("World"),
           extra: Promise.resolve("should be stripped"),
@@ -420,7 +415,10 @@ describe("RouteHandler", () => {
       });
 
       describe("primitive output schemas", () => {
-        const handle = RouteHandlerDefiner(async () => "ok", async () => ({}));
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+        );
 
         test("z.string() output — sync handler returns string as JSON", async () => {
           const route = handle(def.get("/:id", "", z.string()), async () => "hello");
@@ -467,6 +465,190 @@ describe("RouteHandler", () => {
           expect(typeof receivedData).toBe("string");
         });
       });
+
+      test("formatOutput with redirect:true returns 303", async () => {
+        const route = handle(
+          def.get("/:id", "", outputSchema),
+          () => ({ title: "Hello", content: "World" }),
+          () => ({
+            headers: new Headers({ Location: "/new-url" }),
+            redirect: true,
+          }),
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(303);
+        expect(res.headers.get("Location")).toBe("/new-url");
+      });
+
+      test("formatOutput with explicit status overrides default success code", async () => {
+        const route = handle(
+          def.get("/:id", "", outputSchema),
+          () => ({ title: "Hello", content: "World" }),
+          (data) => ({
+            data: JSON.stringify({ title: data.title, content: data.content }),
+            headers: new Headers({ "Content-Type": "application/json" }),
+            status: 202,
+          }),
+        );
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(202);
+      });
+
+      test("promise rejection in JSON path returns 500", async () => {
+        const spy = spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const route = handle(def.get("/:id", "", outputSchema), () => ({
+            title: "Hello",
+            content: new Promise<string>((_, reject) => reject(new Error("async failure"))),
+          }));
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(500);
+        } finally {
+          spy.mockRestore();
+        }
+      });
+
+      test("outputErrorWarning fires for sync handler returning wrong type", async () => {
+        const warnings: { error: z.ZodError<unknown>; data: unknown }[] = [];
+        const handleWithWarning = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          (error, data) => warnings.push({ error, data }),
+        );
+        const route = handleWithWarning(def.get("/:id", "", outputSchema), () => ({
+          title: "Hello",
+          content: 999 as unknown as string,
+        }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(200);
+        expect(warnings.length).toBeGreaterThan(0);
+      });
+    });
+  });
+
+  describe("auth and permissions", () => {
+    test("returns 403 when authorizer returns 'unauthorized'", async () => {
+      const handle = RouteHandlerDefiner(
+        async () => "unauthorized",
+        async () => ({}),
+      );
+      const route = handle(def.get("/:id", "", z.object({ id: z.string() })), (params) => ({ id: params.id }));
+      const res = await route.handlerWrapped(new Request("https://example.com/1"));
+      expect(res.status).toBe(403);
+    });
+
+    test("returns 401 when authorizer returns 'unauthenticated'", async () => {
+      const handle = RouteHandlerDefiner(
+        async () => "unauthenticated",
+        async () => ({}),
+      );
+      const route = handle(def.get("/:id", "", z.object({ id: z.string() })), (params) => ({ id: params.id }));
+      const res = await route.handlerWrapped(new Request("https://example.com/1"));
+      expect(res.status).toBe(401);
+    });
+  });
+
+  describe("body handling (POST)", () => {
+    const bodySchema = z.object({ name: z.string(), age: z.number() });
+    const handle = RouteHandlerDefiner(
+      async () => "ok",
+      async () => ({}),
+    );
+    const route = handle(
+      def.post("/item", "", bodySchema, z.object({ name: z.string(), age: z.number() })),
+      (_params, body) => ({ name: body.name, age: body.age }),
+    );
+
+    test("POST with valid JSON body returns 201", async () => {
+      const res = await route.handlerWrapped(
+        new Request("https://example.com/item", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "Joe", age: 30 }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({ name: "Joe", age: 30 });
+    });
+
+    test("POST with invalid JSON returns 400", async () => {
+      const res = await route.handlerWrapped(
+        new Request("https://example.com/item", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "not-json{",
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    test("POST body failing schema validation returns 400", async () => {
+      const res = await route.handlerWrapped(
+        new Request("https://example.com/item", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: "Joe", age: "not-a-number" }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    test("POST with unsupported content type returns 415", async () => {
+      const res = await route.handlerWrapped(
+        new Request("https://example.com/item", {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: "hello",
+        }),
+      );
+      expect(res.status).toBe(415);
+    });
+
+    test("POST with form data coerces numbers and returns 201", async () => {
+      const formData = new FormData();
+      formData.append("name", "Joe");
+      formData.append("age", "30");
+      const res = await route.handlerWrapped(
+        new Request("https://example.com/item", { method: "POST", body: formData }),
+      );
+      expect(res.status).toBe(201);
+      expect(await res.json()).toEqual({ name: "Joe", age: 30 });
+    });
+  });
+
+  describe("error handling", () => {
+    const handle = RouteHandlerDefiner(
+      async () => "ok",
+      async () => ({}),
+    );
+
+    test("handler throwing NotFoundError returns 404", async () => {
+      const route = handle(def.get("/:id", "", z.object({})), () => {
+        throw new NotFoundError();
+      });
+      const res = await route.handlerWrapped(new Request("https://example.com/1"));
+      expect(res.status).toBe(404);
+    });
+
+    test("handler throwing RequestError returns its status code", async () => {
+      const route = handle(def.get("/:id", "", z.object({})), () => {
+        throw new RequestError(422, "Unprocessable Entity");
+      });
+      const res = await route.handlerWrapped(new Request("https://example.com/1"));
+      expect(res.status).toBe(422);
+    });
+
+    test("handler throwing a generic Error returns 500", async () => {
+      const spy = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new Error("something went wrong");
+        });
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(500);
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

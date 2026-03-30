@@ -94,7 +94,36 @@ test("handle optional path arguments", () => {
 test("throws if a non optional parameter follows an optional", () => {
   const r = new Router();
   //cast is needed since we are actually disallowing it on a type level
-  expect(() =>
-    r.addRoute("get", "/hello/:id?/:name" as any, () => new Response("HELLO")),
-  ).toThrow();
+  expect(() => r.addRoute("get", "/hello/:id?/:name" as any, () => new Response("HELLO"))).toThrow();
+});
+
+test("throws on duplicate route registration", () => {
+  const r = new Router();
+  r.addRoute("get", "/hello", () => new Response("Hello"));
+  expect(() => r.addRoute("get", "/hello", () => new Response("Hello2"))).toThrow();
+  // different method on same path is allowed
+  expect(() => r.addRoute("post", "/hello", () => new Response("Post"))).not.toThrow();
+});
+
+test("handleRequest dispatches to the matching handler", async () => {
+  const r = new Router();
+  r.addRoute("get", "/hello/:name", (req) => {
+    const url = new URL(req.url);
+    return new Response(`hi ${extractParams("/hello/:name", url)["name"]}`);
+  });
+  const res = await r.handleRequest(new Request("https://example.com/hello/world"));
+  expect(res.status).toBe(200);
+  expect(await res.text()).toBe("hi world");
+});
+
+test("handleRequest falls back to defaultRoute when no route matches", async () => {
+  const r = new Router();
+  r.addRoute("get", "/exists", () => new Response("found"));
+  const res = await r.handleRequest(new Request("https://example.com/missing"));
+  expect(res.status).toBe(404);
+
+  const custom = new Router(() => new Response("custom 404", { status: 404 }));
+  const res2 = await custom.handleRequest(new Request("https://example.com/missing"));
+  expect(res2.status).toBe(404);
+  expect(await res2.text()).toBe("custom 404");
 });

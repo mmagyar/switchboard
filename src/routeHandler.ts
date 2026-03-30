@@ -1,5 +1,6 @@
 /* eslint-disable max-lines-per-function */
-import type { ZodError, ZodObject, z } from "zod";
+import { ZodObject } from "zod";
+import type { ZodError, z } from "zod";
 import {
   type HTTPMethods,
   type HTTPMethodsWithBody,
@@ -102,6 +103,16 @@ const errorResponse =
     );
   };
 
+const resolveAllProperties = async (obj: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  const resolved = await Promise.all(Object.entries(obj).map(async ([k, v]) => [k, await v] as const));
+  return Object.fromEntries(resolved);
+};
+
+const hasPromiseValues = (obj: unknown): obj is Record<string, unknown> =>
+  obj !== null &&
+  typeof obj === "object" &&
+  Object.values(obj as Record<string, unknown>).some((v) => v instanceof Promise);
+
 /**
  * Wraps the handler with the necessary logic to handle the request.
  * This includes:
@@ -153,28 +164,18 @@ export const wrapHandler = <
 ): ReqRes => {
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = def;
 
-  const resolveAllProperties = async (obj: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const resolved = await Promise.all(Object.entries(obj).map(async ([k, v]) => [k, await v] as const));
-    return Object.fromEntries(resolved);
-  };
-
-  const hasPromiseValues = (obj: unknown): obj is Record<string, unknown> =>
-    obj !== null &&
-    typeof obj === "object" &&
-    Object.values(obj as Record<string, unknown>).some((v) => v instanceof Promise);
-
   const validatePerProperty = (obj: unknown) => {
     if (obj === null || typeof obj !== "object") return;
-    const shape = (outputValidation as unknown as ZodObject<any>).shape;
-    if (!shape) return;
+    if (!(outputValidation instanceof ZodObject)) return;
+    const shape = outputValidation.shape;
     for (const [key, value] of Object.entries(obj)) {
-      const fieldSchema = shape[key] as z.ZodType | undefined;
+      const fieldSchema: z.ZodType | undefined = shape[key];
       if (!fieldSchema) continue;
       const warn = (v: unknown) => {
         const parsed = fieldSchema.safeParse(v);
         if (!parsed.success) outputErrorWarning?.(parsed.error, v, method, key);
       };
-      if (value instanceof Promise) value.then(warn);
+      if (value instanceof Promise) void value.then(warn).catch(() => undefined);
       else warn(value);
     }
   };
@@ -208,10 +209,8 @@ export const wrapHandler = <
               data[key] = value;
               return;
             }
-            if (!Array.isArray(data[key])) {
-              data[key] = [data[key]];
-            }
-            (data[key] as unknown[]).push(value);
+            const existing = data[key];
+            data[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
           });
           // TODO: support encoded objects, use merge function
           // Form data does not have data types, everything is a string,

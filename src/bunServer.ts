@@ -45,12 +45,12 @@ const genCert = async (domain: string = "localhost") => {
 
 const accessLogDefault = (time: number, req: Request, res?: Response) => {
   const url = new URL(req.url);
-  //Do not log requiests to resources in public folder
+  // Do not log requests to resources in public folder
   if (url.pathname.startsWith("/public")) {
     return;
   }
 
-  // Do not log app.log requests, as that would just same the logs
+  // Do not log app.log requests, as that would just spam the logs
   if (url.pathname.startsWith("/app.log")) {
     return;
   }

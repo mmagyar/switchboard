@@ -1,8 +1,14 @@
 import type { ZodNumber, ZodOptional, ZodString, ZodType } from "zod";
-import { z } from "zod";
+import { z, ZodObject } from "zod";
 import type { HTTPMethods, HTTPMethodsWithBody, HTTPMethodsWithoutBody } from "./staticDefs.ts";
 import type { FilterByIdEnding, PathToMandatoryKeys, PathToOptionalKeys, ValidateOptionalUrl } from "./urlType.ts";
-import { extractMandatoryParamNames, extractOptionalParamNames, getIdNames, getNonIdNames } from "./urlUtils.ts";
+import {
+  extractMandatoryParamNames,
+  extractOptionalParamNames,
+  extractParamNames,
+  getIdNames,
+  getNonIdNames,
+} from "./urlUtils.ts";
 import type { RouteWithBody, RouteWithoutBody } from "./routeBaseType.ts";
 
 /**
@@ -12,7 +18,7 @@ import type { RouteWithBody, RouteWithoutBody } from "./routeBaseType.ts";
  * @param paramsValidation Validate path params and query string - don't forget,
  *                         by default all data here are strings under the keys, but zod can parse them to number while validating
  *                         This will be the first parameter in the handler
- *                         TODO implement that if the path has params (sections starting with /: ) they MUST be in this validatin
+ *                         Path params (sections starting with /: ) are validated to be present in the schema at definition time.
  * @param bodyValidation body validator, it will run on the request body (req.body),
  *                       type of the second handler argument is derived from this
  * @param outputValidation  Output Validator, used to make sure that we are sending back correct data,
@@ -32,6 +38,26 @@ export type Route<
     ? RouteWithoutBody<METHOD, PATH, PERMISSION, PARAMS, OUT>
     : never;
 type MaybeZodType = ZodType | undefined;
+
+function assertPathParamsInSchema(path: string, paramsValidation: ZodType): void {
+  const pathParams = extractParamNames(path as Parameters<typeof extractParamNames>[0]);
+  if (pathParams.length === 0) return;
+
+  if (!(paramsValidation instanceof ZodObject)) {
+    throw new Error(
+      `Route "${path}" has path params [${pathParams.join(", ")}] but paramsValidation is not a ZodObject`,
+    );
+  }
+
+  const schemaKeys = Object.keys(paramsValidation.shape);
+  const missingParams = pathParams.filter((param) => !schemaKeys.includes(param));
+  if (missingParams.length > 0) {
+    throw new Error(
+      `Route "${path}" has path params [${missingParams.join(", ")}] missing from paramsValidation schema`,
+    );
+  }
+}
+
 type MaybeUrl<PATH extends string, T extends MaybeZodType = undefined> = T extends ZodType ? T : UrlParamsSchema<PATH>;
 export const define = <PERMISSION>() => {
   return {
@@ -47,6 +73,7 @@ export const define = <PERMISSION>() => {
       outputValidation: OUT,
       paramsValidation?: PARAMS,
     ): RouteWithoutBody<"get", PATH, PERMISSION, PARAMS extends ZodType ? PARAMS : UrlParamsSchema<PATH>, OUT> => {
+      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       return {
         method: "get",
         path,
@@ -65,6 +92,7 @@ export const define = <PERMISSION>() => {
       outputValidation: OUT,
       paramsValidation: PARAMS,
     ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
+      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       return {
         method: "delete",
         path,
@@ -79,6 +107,7 @@ export const define = <PERMISSION>() => {
       outputValidation: OUT,
       paramsValidation?: PARAMS,
     ): RouteWithoutBody<"options", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
+      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       return {
         method: "options",
         path,
@@ -99,6 +128,7 @@ export const define = <PERMISSION>() => {
       outputValidation: OUT,
       paramsValidation?: PARAMS,
     ): RouteWithBody<"post", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
+      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       return {
         method: "post",
         path,
@@ -121,6 +151,7 @@ export const define = <PERMISSION>() => {
       outputValidation: OUT,
       paramsValidation?: PARAMS,
     ): RouteWithBody<"put", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
+      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       return {
         method: "put",
         path,
@@ -143,6 +174,7 @@ export const define = <PERMISSION>() => {
       outputValidation: OUT,
       paramsValidation?: PARAMS,
     ): RouteWithBody<"patch", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
+      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       return {
         method: "patch",
         path,

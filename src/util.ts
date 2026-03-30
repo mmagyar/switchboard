@@ -101,7 +101,7 @@ export const objectToArray = <T extends Record<any, any>, OUT, FILTER extends bo
   return result as FILTER extends true ? ExcludeUndefined<OUT>[] : OUT[];
 };
 
-export const deepFreeze = <T>(o: T | any): T => {
+export const deepFreeze = <T>(o: T): T => {
   Object.entries(o).forEach(([key, value]) => {
     o[key] = value && typeof value === "object" ? deepFreeze(value) : value;
   });
@@ -240,7 +240,8 @@ export function merge<T extends object, U extends object>(
   return output;
 }
 
-export const promiseTimeout = (time: number): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, time));
+export const promiseTimeout = (time: number): Promise<void> =>
+  new Promise<void>((resolve) => setTimeout(resolve, time));
 
 export const promiseDelay =
   <T>(time: number): ((result: T) => Promise<T>) =>

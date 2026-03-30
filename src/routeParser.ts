@@ -7,8 +7,8 @@ import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly
 type ZodUnwrap<T> = T extends ZodReadonly<infer K> ? ZodUnwrap<K> : T extends ZodOptional<infer K> ? ZodUnwrap<K> : T;
 
 export const zodUnwrap = <T>(schema: T): ZodUnwrap<T> => {
-  if (schema instanceof ZodReadonly) return zodUnwrap(schema.def.innerType) as any; // recursive generic, cast is safe
-  if (schema instanceof ZodOptional) return zodUnwrap(schema.def.innerType) as any; // recursive generic, cast is safe
+  if (schema instanceof ZodReadonly) return zodUnwrap(schema.unwrap()) as any; // recursive generic, cast is safe
+  if (schema instanceof ZodOptional) return zodUnwrap(schema.unwrap()) as any; // recursive generic, cast is safe
   return schema as ZodUnwrap<T>;
 };
 
@@ -176,6 +176,7 @@ export const parseBooleanFromForm = (
   schemaIn: z.ZodType,
   input: unknown,
 ): Record<string, any> | boolean[] | boolean | undefined => {
+  if (typeof input === "undefined") return undefined;
   const schema = zodUnwrap(schemaIn);
 
   if (schema instanceof ZodUnion) {

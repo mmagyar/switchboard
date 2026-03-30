@@ -21,16 +21,96 @@ export const matchRoute = (route: string, path: URL): boolean => {
   return true;
 };
 
+type StoredRoute = {
+  method: HTTPMethods;
+  route: string;
+  handler: (req: Request) => Promise<Response> | Response;
+};
+
+type ParamEdge = {
+  node: TrieNode;
+  name: string;
+  optional: boolean;
+};
+
+type TrieNode = {
+  staticChildren: Map<string, TrieNode>;
+  paramChild: ParamEdge | null;
+  handlers: Map<string, StoredRoute>;
+};
+
+const makeNode = (): TrieNode => ({
+  staticChildren: new Map(),
+  paramChild: null,
+  handlers: new Map(),
+});
+
+const trieInsert = (
+  root: TrieNode,
+  method: HTTPMethods,
+  normalized: string,
+  handler: (req: Request) => Promise<Response> | Response,
+): void => {
+  const segments = decomposeUrl(normalized).filter((s) => s !== "");
+  let node = root;
+
+  for (const segment of segments) {
+    if (segment.startsWith(":")) {
+      const optional = segment.endsWith("?");
+      const name = optional ? segment.slice(1, -1) : segment.slice(1);
+      if (!node.paramChild) {
+        node.paramChild = { node: makeNode(), name, optional };
+      }
+      node = node.paramChild.node;
+    } else {
+      if (!node.staticChildren.has(segment)) {
+        node.staticChildren.set(segment, makeNode());
+      }
+      node = node.staticChildren.get(segment)!;
+    }
+  }
+
+  const entry: StoredRoute = { method, route: normalized, handler };
+  node.handlers.set(method, entry);
+};
+
+const trieLookup = (node: TrieNode, segments: string[], segIndex: number, method: string): StoredRoute | undefined => {
+  if (segIndex >= segments.length) {
+    const h = node.handlers.get(method);
+    if (h) return h;
+    // Path exhausted — follow optional param edges looking for a handler
+    if (node.paramChild?.optional) {
+      return trieLookup(node.paramChild.node, segments, segIndex, method);
+    }
+    return undefined;
+  }
+
+  const segment = segments[segIndex]!;
+
+  // 1. Prefer exact static match
+  const staticChild = node.staticChildren.get(segment);
+  if (staticChild) {
+    const r = trieLookup(staticChild, segments, segIndex + 1, method);
+    if (r) return r;
+  }
+
+  // 2. Fall back to param (mandatory or optional, both consume the segment)
+  if (node.paramChild) {
+    return trieLookup(node.paramChild.node, segments, segIndex + 1, method);
+  }
+
+  return undefined;
+};
+
 export class Router {
-  private readonly routes: {
-    method: HTTPMethods;
-    route: string;
-    handler: (req: Request) => Promise<Response> | Response;
-  }[] = [];
+  private readonly root: TrieNode = makeNode();
+  private readonly registeredRoutes = new Set<string>();
+
   constructor(
     public readonly defaultRoute: (r: Request) => Promise<Response> | Response = () =>
       new Response("Not found - Route not defined", { status: 404 }),
   ) {}
+
   addRoute<T extends string>(
     method: HTTPMethods,
     route: ValidateOptionalUrl<T>,
@@ -38,14 +118,17 @@ export class Router {
   ) {
     checkRouteOptionalParameterOrder(route);
     const normalized = route.startsWith("/") ? route : `/${route}`;
-    if (this.routes.some((r) => r.method === method && r.route === normalized)) {
+    const key = `${method}:${normalized}`;
+    if (this.registeredRoutes.has(key)) {
       throw new Error(`Duplicate route: ${method.toUpperCase()} ${normalized}`);
     }
-    this.routes.push({ method, route: normalized, handler });
+    this.registeredRoutes.add(key);
+    trieInsert(this.root, method, normalized, handler);
   }
-  getRoute(method: HTTPMethods, path: URL) {
-    //TODO optimize this lookup, okay for now
-    return this.routes.find((r) => r.method === method && matchRoute(r.route, path));
+
+  getRoute(method: HTTPMethods, path: URL): StoredRoute | undefined {
+    const segments = decomposeUrl(path.pathname).filter((s) => s !== "");
+    return trieLookup(this.root, segments, 0, method);
   }
 
   handleRequest(req: Request): Promise<Response> | Response {

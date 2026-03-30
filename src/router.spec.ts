@@ -127,3 +127,48 @@ test("handleRequest falls back to defaultRoute when no route matches", async () 
   expect(res2.status).toBe(404);
   expect(await res2.text()).toBe("custom 404");
 });
+
+test("trie: static segments take priority over param segments", async () => {
+  const r = new Router();
+  r.addRoute("get", "/users/me", () => new Response("ME"));
+  r.addRoute("get", "/users/:id", () => new Response("USER"));
+
+  const meRoute = r.getRoute("get", new URL("/users/me", url));
+  expect(await meRoute?.handler({} as Request)).toEqual(new Response("ME"));
+  expect(await (await meRoute?.handler({} as Request))?.text()).toBe("ME");
+
+  const idRoute = r.getRoute("get", new URL("/users/42", url));
+  expect(await (await idRoute?.handler({} as Request))?.text()).toBe("USER");
+});
+
+test("trie: deeply nested static + param routes resolve correctly", async () => {
+  const r = new Router();
+  r.addRoute("get", "/a/b/c", () => new Response("STATIC"));
+  r.addRoute("get", "/a/:x/c", () => new Response("PARAM"));
+
+  const staticRoute = r.getRoute("get", new URL("/a/b/c", url));
+  expect(await (await staticRoute?.handler({} as Request))?.text()).toBe("STATIC");
+
+  const paramRoute = r.getRoute("get", new URL("/a/other/c", url));
+  expect(await (await paramRoute?.handler({} as Request))?.text()).toBe("PARAM");
+});
+
+test("trie: multiple optional trailing params", async () => {
+  const r = new Router();
+  r.addRoute("get", "/search/:term?/:page?", () => new Response("SEARCH"));
+
+  expect(r.getRoute("get", new URL("/search", url))).toBeDefined();
+  expect(r.getRoute("get", new URL("/search/foo", url))).toBeDefined();
+  expect(r.getRoute("get", new URL("/search/foo/2", url))).toBeDefined();
+});
+
+test("trie: different methods on same path are independent", async () => {
+  const r = new Router();
+  r.addRoute("get", "/resource", () => new Response("GET"));
+  r.addRoute("post", "/resource", () => new Response("POST"));
+  r.addRoute("delete", "/resource", () => new Response("DELETE"));
+
+  expect(await (await r.getRoute("get", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("GET");
+  expect(await (await r.getRoute("post", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("POST");
+  expect(await (await r.getRoute("delete", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("DELETE");
+});

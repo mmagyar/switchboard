@@ -1,73 +1,266 @@
 # Switchboard
 
-A router that is simple to use, not overly complex but can do great things
+A type-safe router for Bun with Zod validation, permission handling, and streaming SSR support.
 
 ## Features
 
-- Type-safe route definitions (because we don't trust you)
-- Zod validation (so you can't mess up as badly)
-- Permission handling (to keep the riffraff out)
-- Automatic parameter parsing (since you can't be bothered)
-- Error handling (for when you inevitably screw something up)
+- Type-safe route definitions with compile-time path validation
+- Zod validation for params, body, and output
+- Permission handling via a pluggable authorizer
+- Automatic parameter parsing from path and query string
+- Promisable handler return types — individual properties can be Promises (streaming SSR)
+- Pluggable error handling, HTML error pages, and logging
+- Built-in HTTPS for local development (self-signed cert generated on demand)
+- WebSocket-based hot reload support
 
 ## Usage
 
-```typescript
+### 1. Set up the definer
 
+```typescript
 import { define, RouteHandlerDefiner, Router, serveHotBuns } from "switchboard";
 import z from "zod";
 
-export type PermissionsType = ("public" | "private")[];
+export type PermissionsType = "public" | "private";
 export type User = { name: string };
+
 export const def = define<PermissionsType>();
 
 export const handle = RouteHandlerDefiner<User, PermissionsType>(
-  async (_user, _permissionsNeeded, _req) => {
-    return "ok"; // Check permissions
+  async (_user, permissionsNeeded, _req) => {
+    // Return "ok", "unauthorized", or "unauthenticated"
+    return permissionsNeeded === "public" ? "ok" : "unauthorized";
   },
-  async () => {
-    return { name: "John" }; //Set the user, maybe get from jwt / db up to you
+  async (_req): Promise<User> => {
+    // Resolve the user from the request (JWT, session, etc.)
+    return { name: "John" };
   },
-  (s, x) => {
-    //How do you want to log output validation errors
-    console.warn("** OUTPUT VALIDATION FAILED **", s, " ** DATA ** ", x);
+  {
+    // Optional: warn when handler output doesn't match the output schema
+    outputErrorWarning: (error, data, method, url) => {
+      console.warn("Output validation failed", { method, url, error, data });
+    },
+    // Optional: map thrown errors to HTTP status + message
+    errorParser: async (error) => {
+      if (error instanceof MyAppError) return { status: error.status, message: error.message };
+    },
+    // Optional: render a custom HTML error page
+    errorHtmlFormatter: async (status, message, _req, _user) => {
+      return `<html><body><h1>${status}</h1><p>${message}</p></body></html>`;
+    },
+    // Optional: override the default error logger (defaults to console.error)
+    errorLogger: (...args) => myLogger.error(...args),
   },
 );
+```
 
-const apiDefinition = def.get(
-  "/order",
-  [],
-  z.object({ restaurents: z.array(z.string()) }),
-  z.object({ fromSearchString: z.string().optional() }),
+### 2. Define routes
+
+```typescript
+const listRoute = def.get(
+  "/orders",
+  "public",
+  z.object({ orders: z.array(z.string()) }),
+  z.object({ search: z.string().optional() }),
 );
 
-export const apiHandler = handle(apiDefinition, async (x) => {
-  return { restaurents: ["sdf"] };
+export const listHandler = handle(listRoute, async ({ search }) => {
+  return { orders: search ? ["burger"] : ["burger", "fries"] };
 });
 
-const routes = [apiHandler];
+const createRoute = def.post(
+  "/orders",
+  "private",
+  z.object({ item: z.string() }),        // body schema
+  z.object({ id: z.number() }),           // output schema
+);
+
+export const createHandler = handle(createRoute, async (_params, body) => {
+  return { id: 42 };
+});
+```
+
+### 3. Register routes and start the server
+
+```typescript
+const routes = [listHandler, createHandler];
 
 const router = new Router();
-routes.map((x) => router.addRoute(x.method, x.path, x.handlerWrapped));
+routes.forEach((r) => router.addRoute(r.method, r.path, r.handlerWrapped));
 
-// and than server the request, in you http request handler, however you want:
-serveHotBuns(
+// Full-featured Bun server with optional HTTPS and hot reload
+await serveHotBuns(
   {
     port: 8891,
     development: true,
     hostname: "localhost",
-    https: "generate",
+    https: "generate", // auto-generates a self-signed cert
   },
   router,
 );
 
-//or, more barebones options
-res = await router.handleRequest(req)
-
+// Or, barebones — handle requests yourself
+const res = await router.handleRequest(req);
 ```
 
+---
+
+## API Reference
+
+### `define<PERMISSION>()`
+
+Returns a set of route definition helpers (`get`, `post`, `put`, `patch`, `del`, `options`). Each enforces `ValidateOptionalUrl` on the path at the type level, catching malformed paths at compile time.
+
+```typescript
+const def = define<"public" | "admin">();
+
+def.get(path, permissionsNeeded, outputSchema, paramsSchema?)
+def.post(path, permissionsNeeded, bodySchema, outputSchema, paramsSchema?)
+def.put(path, permissionsNeeded, bodySchema, outputSchema, paramsSchema?)
+def.patch(path, permissionsNeeded, bodySchema, outputSchema, paramsSchema?)
+def.del(path, permissionsNeeded, outputSchema, paramsSchema)
+def.options(path, permissionsNeeded, outputSchema, paramsSchema?)
+```
+
+If no `paramsSchema` is provided, one is derived automatically from the path template (e.g. `/:id` → `{ id: z.number() }`).
+
+---
+
+### `RouteHandlerDefiner<USER, PERMISSION>(authorizer, getUserFromRequest, options?)`
+
+Creates a `handle` function bound to your auth and user-resolution logic.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `authorizer` | `(user, permissionsNeeded, req) => Promise<"ok" \| "unauthorized" \| "unauthenticated">` | Checks whether the resolved user may access the route |
+| `getUserFromRequest` | `(req) => Promise<USER>` | Resolves the current user from the request |
+| `options` | `RouteHandlerOptions<USER>` | Optional callbacks — see below |
+
+#### `RouteHandlerOptions<USER>`
+
+```typescript
+type RouteHandlerOptions<USER> = {
+  outputErrorWarning?: (error: ZodError, data: unknown, method: string, url: string) => void;
+  errorParser?: (error: unknown) => Promise<{ status: number; message: string } | undefined>;
+  errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>;
+  errorLogger?: (...args: unknown[]) => void; // defaults to console.error
+};
+```
+
+---
+
+### `handle(routeDef, handler, formatOutput?)`
+
+Binds a handler function to a route definition.
+
+```typescript
+const myRoute = handle(
+  def.get("/items/:id", "public", outputSchema),
+  async ({ id }, user) => {
+    return { item: await db.findItem(id) };
+  },
+  (data, user, req, params) => {
+    // Optional: format the response yourself (e.g. render HTML)
+    return { data: renderHtml(data), headers: new Headers({ "Content-Type": "text/html" }) };
+  },
+);
+```
+
+#### Promisable handler returns
+
+Handlers may return an object whose **individual properties are Promises**. When a `formatOutput` function is provided, those Promise-valued properties are passed through as-is, enabling streaming SSR. Output validation fires per-property in the background as each Promise resolves.
+
+When no `formatOutput` is provided (JSON path), all properties are awaited before serialization.
+
+```typescript
+handle(routeDef, async (params) => {
+  return {
+    user: db.getUser(params.id),        // Promise — resolved lazily
+    settings: db.getSettings(params.id), // Promise — resolved lazily
+  };
+}, renderHtml(MyView));
+```
+
+---
+
+### `serveHotBuns(conf, router, accessLog?, readLogs?, watchLogs?)`
+
+Starts a Bun HTTP(S) server wired to the router, with optional WebSocket hot-reload support.
+
+| Parameter | Default | Description |
+|---|---|---|
+| `conf.port` | `80` / `443` | Listening port |
+| `conf.hostname` | `"0.0.0.0"` | Bind address |
+| `conf.development` | `true` | Enables Bun development mode |
+| `conf.https` | — | `"generate"` to auto-generate a self-signed cert, or `{ cert, key }` |
+| `accessLog` | built-in | Custom access log function `(duration, req, res?) => void` |
+| `readLogs` | — | Optional: `() => Promise<string>` — supplies log content to WebSocket clients |
+| `watchLogs` | — | Optional: `(onChange: () => void) => void` — notifies when logs change |
+
+`readLogs` and `watchLogs` are injected externally, keeping the server decoupled from any specific logging implementation. Both must be provided together for live log streaming to work.
+
+Returns a `sendReload` function that pushes a `RELOAD` message to all connected WebSocket clients.
+
+---
+
+### `call(route, params, body?, settings?)` *(client-side)*
+
+Type-safe fetch wrapper for use in the browser or other HTTP clients.
+
+```typescript
+import { call, setBaseUrl } from "switchboard/client";
+
+setBaseUrl("https://api.example.com");
+
+const result = await call(listRoute, { search: "burger" });
+```
+
+#### `settings`
+
+| Field | Description |
+|---|---|
+| `authTokenOverride` | Set to a bearer token string to add an `Authorization` header; `null` to send no auth |
+| `methodOverride` | Override the HTTP method string |
+| `validateReturn` | Set to `false` to skip Zod parsing of the response (default: `true`) |
+| `baseUrlOverride` | Override the global base URL for this call |
+| `withCredentials` | Send cookies with the request |
+
+Auth is only applied when `authTokenOverride` is explicitly set to a non-null string. There is no implicit token source.
+
+---
+
+## Path parameter conventions
+
+Path segments starting with `:` are extracted as route parameters. Segments ending in `Id` are parsed as numbers; all others are kept as strings.
+
+```
+/orders/:orderId          → { orderId: z.number() }
+/users/:username          → { username: z.string() }
+/items/:itemId?           → { itemId: z.optional(z.number()) }
+```
+
+---
+
+## Internals
+
+### Routing algorithm
+
+Route lookup uses a **trie** (prefix tree) keyed by path segment. Each node in the trie represents one segment; the root's children are the first segments of all registered paths. Matching walks the trie one segment at a time, giving **O(segments)** lookup regardless of how many routes are registered.
+
+At each trie level, static segments are tried before parameter segments (`:param`), so `/users/settings` will always win over `/users/:id` when both are registered.
+
+### Why not Bun's built-in router?
+
+Bun ships two routing facilities that were considered:
+
+- **`Bun.FileSystemRouter`** — designed for Next.js-style file-system conventions (maps files on disk to URL paths). It is not a general-purpose path matcher and requires a directory of files to scan.
+- **`routes` option of `Bun.serve`** — pattern matching is baked into the server instance itself and cannot be used as a standalone path-matching primitive outside of a `Bun.serve` call.
+
+Neither can be used as a drop-in path matcher decoupled from a specific server setup, so the trie implementation is used instead. It provides the same O(segments) performance with no external dependencies.
+
+---
+
 ## TODO
- - Router - implement that if the path has params (sections starting with /: ) they MUST be in this validation
- - Router - optimize this lookup, okay for now - Or just use Bun's resolution of paths
- - Create a more flexible error handling for custom error responses
- - Output formatter for errors, for HTML error pages
+
+- Router — validate that path params in the template are present in the params schema
+- More flexible error response formatting

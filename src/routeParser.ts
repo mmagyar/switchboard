@@ -7,8 +7,8 @@ import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly
 type ZodUnwrap<T> = T extends ZodReadonly<infer K> ? ZodUnwrap<K> : T extends ZodOptional<infer K> ? ZodUnwrap<K> : T;
 
 export const zodUnwrap = <T>(schema: T): ZodUnwrap<T> => {
-  if (schema instanceof ZodReadonly) return zodUnwrap(schema.def.innerType) as any;
-  if (schema instanceof ZodOptional) return zodUnwrap(schema.def.innerType) as any;
+  if (schema instanceof ZodReadonly) return zodUnwrap(schema.def.innerType) as any; // recursive generic, cast is safe
+  if (schema instanceof ZodOptional) return zodUnwrap(schema.def.innerType) as any; // recursive generic, cast is safe
   return schema as ZodUnwrap<T>;
 };
 
@@ -212,8 +212,8 @@ export const parseObjectFromForm = (
 
 export const parseFieldName = (fieldName: string, fieldValue?: string | string[]): object => {
   const parts = fieldName.split(".");
-  const result: any = {};
-  let current = result;
+  const result: Record<string, unknown> = {};
+  let current: Record<string, unknown> = result;
   for (let i = 0; i < parts.length; i++) {
     current[parts[i]!] = isNumeric(parts[i + 1]) ? [] : {};
 
@@ -271,8 +271,6 @@ export const parseUrl = <PATH extends string, PARAMS extends z.ZodType>(
     parsedNumbersOnly = undefined;
   }
 
-  //TODO this nonEmpty does not work for undefined objects
-  // (??? What does this mean, i don't even know anymore)
   const parsedNumbers = merge(parsedObjectDepth, parsedNumbersOnly, "nonEmpty");
 
   let parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);

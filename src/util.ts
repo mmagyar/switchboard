@@ -61,7 +61,7 @@ export const keys = <T extends Record<Keys, any>, Keys extends keyof T = keyof T
 
 // export const entries = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(obj: T) =>
 //   Object.entries(obj) as [Keys, T[Keys]][];
-export const entriesWithUndefiend = <T extends object>(obj: T) => {
+export const entriesWithUndefined = <T extends object>(obj: T) => {
   return Object.entries(obj) as [keyof T, T[keyof T]][];
 };
 
@@ -70,10 +70,6 @@ export const entriesWithUndefiend = <T extends object>(obj: T) => {
  **/
 export const entries = <T extends object>(obj: T) => {
   return Object.entries(obj).filter(([, value]) => value !== undefined) as [keyof T, Exclude<T[keyof T], undefined>][];
-  // .map(([key, value]) => [key as keyof T, value as Exclude<T[keyof T], undefined>]) as [
-  // keyof T,
-  // Exclude<T[keyof T], undefined>,
-  // ][];
 };
 export function toObject<T, K extends number | string | symbol>(
   array: T[],
@@ -113,11 +109,10 @@ export const deepFreeze = <T>(o: T | any): T => {
 };
 
 export const deepCopy = <T>(obj: T): T => {
-  let copy: any = null;
+  let copy: any = null; // deep generic — any is unavoidable here
 
   // Handle the 3 simple types, and null or undefined
-  // eslint-disable-next-line eqeqeq
-  if (obj == null || typeof obj !== "object") return obj;
+  if (obj === null || obj === undefined || typeof obj !== "object") return obj;
 
   // Handle Date
   if (obj instanceof Date) {
@@ -152,10 +147,12 @@ export const deepCopy = <T>(obj: T): T => {
 };
 
 /** Is defined object, and not an array **/
+// deep generic — any is unavoidable here
 function isObject(item: any): item is object {
   return item && typeof item === "object" && !Array.isArray(item);
 }
 
+// deep generic — any is unavoidable here
 function isObjectOrArray(item: any): item is object | any[] {
   return item && (typeof item === "object" || Array.isArray(item));
 }
@@ -214,7 +211,7 @@ export function merge<T extends object, U extends object>(
     }
   }
 
-  const output: any = { ...base } as T & U;
+  const output: any = { ...base } as T & U; // deep generic — any is unavoidable here
   if (isObject(base) && isObject(override)) {
     Object.keys(override).forEach((key) => {
       const overrideKey = key as keyof U;
@@ -243,7 +240,7 @@ export function merge<T extends object, U extends object>(
   return output;
 }
 
-export const promiseTimeout = <T>(time: number): Promise<T> => new Promise<T>((resolve) => setTimeout(resolve, time));
+export const promiseTimeout = (time: number): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, time));
 
 export const promiseDelay =
   <T>(time: number): ((result: T) => Promise<T>) =>

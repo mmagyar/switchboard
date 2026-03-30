@@ -22,7 +22,7 @@ export const matchRoute = (route: string, path: URL): boolean => {
 };
 
 export class Router {
-  routes: {
+  private readonly routes: {
     method: HTTPMethods;
     route: string;
     handler: (req: Request) => Promise<Response> | Response;
@@ -37,12 +37,11 @@ export class Router {
     handler: (req: Request) => Promise<Response> | Response,
   ) {
     checkRouteOptionalParameterOrder(route);
-
-    this.routes.push({
-      method,
-      route: route.startsWith("/") ? route : `/${route}`,
-      handler,
-    });
+    const normalized = route.startsWith("/") ? route : `/${route}`;
+    if (this.routes.some((r) => r.method === method && r.route === normalized)) {
+      throw new Error(`Duplicate route: ${method.toUpperCase()} ${normalized}`);
+    }
+    this.routes.push({ method, route: normalized, handler });
   }
   getRoute(method: HTTPMethods, path: URL) {
     //TODO optimize this lookup, okay for now

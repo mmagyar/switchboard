@@ -200,7 +200,7 @@ export const wrapHandler = <
       const hasBody = method === "post" || method === "put" || method === "patch";
       if (hasBody) {
         const contentType = req.headers.get("content-type");
-        let data: any = {};
+        let data: Record<string, unknown> = {};
         if (contentType?.includes("form")) {
           const formData = await req.formData();
           formData.forEach((value, key) => {
@@ -211,14 +211,22 @@ export const wrapHandler = <
             if (!Array.isArray(data[key])) {
               data[key] = [data[key]];
             }
-            data[key].push(value);
+            (data[key] as unknown[]).push(value);
           });
           // TODO: support encoded objects, use merge function
           // Form data does not have data types, everything is a string,
           // so we convert data that could be a number to a number type before passing it to zod parse
           forEach(parseNumberFromForm(def.bodyValidation, data) || {}, (value, key) => (data[key] = value));
           forEach(parseBooleanFromForm(def.bodyValidation, data) || {}, (value, key) => (data[key] = value));
-        } else data = await req.json();
+        } else if (contentType === null || contentType.includes("json")) {
+          try {
+            data = (await req.json()) as Record<string, unknown>;
+          } catch {
+            return new Response("Body is not valid JSON", { status: 400 });
+          }
+        } else {
+          return new Response(`Unsupported content type: ${contentType}`, { status: 415 });
+        }
         const body = def.bodyValidation.safeParse(data);
         if (!body.success) {
           return new Response("Body does not match defined schema:" + body.error, { status: 400 });

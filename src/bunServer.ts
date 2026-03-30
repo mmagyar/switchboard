@@ -7,7 +7,7 @@ import { VerboseErrorOutput } from "./env.ts";
  * Since this cert will not be validated by a CA you'll need to bypass that warning message
  * TODO domain is not validated, so if it changes it will stilluse the file, so delete it manually
  */
-const genCert = async (domain: string = "matebookpro.local") => {
+const genCert = async (domain: string = "localhost") => {
   //save cert so it does not change between runs, triggering the warning, since it's not a "validated" cert
   const filePath = "./.genCert";
   const cert = Bun.file(filePath);
@@ -55,23 +55,8 @@ const accessLogDefault = (time: number, req: Request, res?: Response) => {
     return;
   }
 
-  const ao: {
-    method: string;
-    url: string;
-    status: number | null;
-    contentType: string;
-    authenticated: boolean;
-    time: number;
-  } = {
-    method: req.method,
-    url: req.url,
-    status: res?.status ?? null,
-    contentType: res?.headers.get("content-type") || "no body",
-    authenticated: false,
-    time: time,
-  };
   console.info(
-    `${ao.method} ${ao.url} ${ao.status} ${ao.contentType} ${Math.round(ao.time * 1000) / 1000}ms ${ao.authenticated} `,
+    `${req.method} ${req.url} ${res?.status ?? null} ${res?.headers.get("content-type") || "no body"} ${Math.round(time * 1000) / 1000}ms`,
   );
 };
 

@@ -60,7 +60,7 @@ export const define = <PERMISSION>() => {
     },
 
     del: <PATH extends string, PARAMS extends MaybeZodType = undefined, OUT extends ZodType = never>(
-      path: PATH,
+      path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation: PARAMS,
@@ -74,7 +74,7 @@ export const define = <PERMISSION>() => {
       };
     },
     options: <PATH extends string, PARAMS extends MaybeZodType = undefined, OUT extends ZodType = never>(
-      path: PATH,
+      path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
@@ -93,7 +93,7 @@ export const define = <PERMISSION>() => {
       BODY extends ZodType = never,
       OUT extends ZodType = never,
     >(
-      path: PATH,
+      path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
@@ -115,7 +115,7 @@ export const define = <PERMISSION>() => {
       BODY extends ZodType = never,
       OUT extends ZodType = never,
     >(
-      path: PATH,
+      path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
@@ -137,7 +137,7 @@ export const define = <PERMISSION>() => {
       BODY extends ZodType = never,
       OUT extends ZodType = never,
     >(
-      path: PATH,
+      path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,

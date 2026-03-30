@@ -70,6 +70,10 @@ export const extractParams = (route: string, path: URL): Record<string, string> 
       if (routeParts[i]?.endsWith("?")) {
         paramName = paramName.slice(0, -1);
       }
+      // The ! is load-bearing for mandatory params: writing undefined into the record
+      // intentionally shadows any same-named query param when the path segment is absent.
+      // Zod then correctly rejects the request for the missing required field.
+      // For optional params the value is genuinely undefined and Zod accepts it.
       params[paramName] = pathParts[i]!;
     }
   }
@@ -80,7 +84,7 @@ export const extractParams = (route: string, path: URL): Record<string, string> 
 const encodeWithSingleQuote = (str?: unknown) =>
   typeof str === "undefined" || str === null ? "" : encodeURIComponent(String(str)).replace(/'/g, "%27");
 
-const encodeKeyValue = (key: string | number | symbol, value: any, search: URLSearchParams) =>
+const encodeKeyValue = (key: string | number | symbol, value: unknown, search: URLSearchParams) =>
   search.append(String(key), String(value));
 
 const objectStringify = (

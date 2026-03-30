@@ -89,7 +89,7 @@ const errorResponse =
   (contentType: string, errorHtmlFormatter?: (status: number, message: string) => Promise<string>) =>
   async (message: string | object, status: number) => {
     const isJson = contentType.includes("json");
-    const isHtml = contentType.includes("html") || !contentType.includes("plain");
+    const isHtml = !isJson && (contentType.includes("html") || !contentType.includes("plain"));
     const messageString = isJson || typeof message === "object" ? JSON.stringify(message) : message;
     return new Response(
       isHtml && errorHtmlFormatter ? await errorHtmlFormatter(status, messageString) : messageString,
@@ -180,7 +180,7 @@ export const wrapHandler = <
   };
 
   return async (req: Request): Promise<Response> => {
-    let user: USER;
+    let user: USER | undefined;
     try {
       user = await getUserFromRequest(req);
       const auth = await authorizer(user, permissionsNeeded, req);

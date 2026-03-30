@@ -26,7 +26,7 @@ export const initFileLogger = () => {
       const content = JSON.stringify(args.length === 1 ? args[0] : [...args]);
 
       logFile.write(`[${date}][${level[0]?.toUpperCase()}] - ${content}\n`, (err) => {
-        if (err) throw err;
+        if (err) logStdout.write(`Failed to write to log file: ${err.message}\n`);
       });
       logStdout.write(`${date} - ${getColorCode(level)}${content}\x1b[0m\n`);
     };

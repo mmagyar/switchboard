@@ -85,10 +85,9 @@ export const serveHotBuns = async (
   r: Router,
   accessLog: (duration: number, req: Request, res: Response | undefined) => void = accessLogDefault,
 ): Promise<() => void> => {
-  let wsc: ServerWebSocket<unknown>[] | undefined;
-  if (!wsc) wsc = [];
+  let wsc: ServerWebSocket<unknown>[] = [];
   const sendReload = () => {
-    wsc?.forEach((x) => x.send("RELOAD"));
+    wsc.forEach((x) => x.send("RELOAD"));
   };
   const ssl = confIn.https === "generate" ? await genCert() : confIn.https;
   // When using ssl, redirect non ssl requests to ssl port 443
@@ -96,7 +95,7 @@ export const serveHotBuns = async (
     Bun.serve({
       port: 80,
       hostname: confIn.hostname || "0.0.0.0",
-      development: confIn.development || true,
+      development: confIn.development ?? true,
       idleTimeout: 10,
       fetch: async (req): Promise<Response> => {
         //redirect to https:
@@ -116,7 +115,7 @@ export const serveHotBuns = async (
   const server = Bun.serve({
     port: confIn.port ?? (ssl ? 443 : 80),
     hostname: confIn.hostname || "0.0.0.0",
-    development: confIn.development || true,
+    development: confIn.development ?? true,
     idleTimeout: 10,
     //generate new CA with openssl on the fly
     tls: ssl,
@@ -144,7 +143,7 @@ export const serveHotBuns = async (
       }, // a message is received
       open(ws) {
         if (VerboseErrorOutput) {
-          wsc?.push(ws);
+          wsc.push(ws);
           logFileChangeWatcher(async () => {
             ws.send(await readLogfile());
           });
@@ -152,7 +151,7 @@ export const serveHotBuns = async (
       }, // a socket is opened
       close(ws, _code, _message) {
         //remove ws from wsc
-        wsc = wsc?.filter((w) => w !== ws);
+        wsc = wsc.filter((w) => w !== ws);
       }, // a socket is closed
       drain(_ws) {}, // the socket is ready to receive more data
     },

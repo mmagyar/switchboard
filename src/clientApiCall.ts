@@ -11,10 +11,6 @@ export const setBaseUrl = (baseUrl: string) => {
   callConfig.baseUrl = baseUrl;
 };
 
-const getSessionTokens = () => {
-  return { tokens: { access_token: "" } };
-};
-
 export const call = async <
   METHOD extends HTTPMethods,
   PATH extends string,
@@ -36,12 +32,8 @@ export const call = async <
 ): Promise<z.infer<OUT>> => {
   const fullPath = defToUrl(route, params);
 
-  //Assume tokens are kept up to date
   let auth: { Authorization: string } | null = null;
-  if (typeof settings.authTokenOverride === "undefined") {
-    const { tokens } = getSessionTokens();
-    auth = tokens ? { Authorization: `Bearer ${tokens.access_token}` } : null;
-  } else if (settings.authTokenOverride !== null) {
+  if (settings.authTokenOverride != null) {
     auth = { Authorization: settings.authTokenOverride };
   }
 

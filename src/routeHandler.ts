@@ -161,6 +161,7 @@ export const wrapHandler = <
   outputErrorWarning?: (error: ZodError<unknown>, data: unknown, method: string, url: string) => void,
   errorParser?: (error: unknown) => Promise<{ status: number; message: string } | undefined>,
   errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>,
+  errorLogger: (...args: unknown[]) => void = console.error,
 ): ReqRes => {
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = def;
 
@@ -289,11 +290,18 @@ export const wrapHandler = <
       }
       let stack;
       if (error instanceof Error) stack = error.stack;
-      console.error(msg, req.url, additionalInfo, error);
+      errorLogger(msg, req.url, additionalInfo, error);
 
       return er(VerboseErrorOutput ? { error: msg, message: additionalInfo, stack } : msg, 500);
     }
   };
+};
+
+export type RouteHandlerOptions<USER> = {
+  outputErrorWarning?: (error: ZodError<unknown>, data: unknown, method: string, url: string) => void;
+  errorParser?: (error: unknown) => Promise<{ status: number; message: string } | undefined>;
+  errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>;
+  errorLogger?: (...args: unknown[]) => void;
 };
 
 export const RouteHandlerDefiner = <USER, PERMISSION>(
@@ -303,9 +311,7 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
     req: Request,
   ) => Promise<"ok" | "unauthorized" | "unauthenticated">,
   getUserFromRequest: (req: Request) => Promise<USER>,
-  outputErrorWarning?: (error: ZodError<unknown>, data: unknown, method: string, url: string) => void,
-  errorParser?: (error: unknown) => Promise<{ status: number; message: string } | undefined>,
-  errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>,
+  options?: RouteHandlerOptions<USER>,
 ): DefineType<PERMISSION, USER> => {
   return <
     METHOD extends HTTPMethods,
@@ -328,9 +334,10 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
         formatOutput as FormatOutput<PARAMS, OUT, USER> | undefined,
         authorizer,
         getUserFromRequest,
-        outputErrorWarning,
-        errorParser,
-        errorHtmlFormatter,
+        options?.outputErrorWarning,
+        options?.errorParser,
+        options?.errorHtmlFormatter,
+        options?.errorLogger,
       ),
     };
   };

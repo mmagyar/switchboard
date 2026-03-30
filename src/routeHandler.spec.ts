@@ -1,4 +1,4 @@
-import { describe, test, expect, spyOn } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { RouteHandlerDefiner } from "./routeHandler.ts";
 import { define } from "./routeDef.ts";
 import { z } from "zod";
@@ -219,6 +219,7 @@ describe("RouteHandler", () => {
       const handle = RouteHandlerDefiner(
         async () => "ok",
         async () => ({}),
+        { errorLogger: () => {} },
       );
 
       test("sync handler still returns JSON as before", async () => {
@@ -357,7 +358,7 @@ describe("RouteHandler", () => {
         const handleWithWarning = RouteHandlerDefiner(
           async () => "ok",
           async () => ({}),
-          (error, data, method, url) => warnings.push({ error, data, method, url }),
+          { outputErrorWarning: (error, data, method, url) => warnings.push({ error, data, method, url }) },
         );
         const route = handleWithWarning(
           def.get("/:id", "", outputSchema),
@@ -382,7 +383,7 @@ describe("RouteHandler", () => {
         const handleWithWarning = RouteHandlerDefiner(
           async () => "ok",
           async () => ({}),
-          (error, data, method, url) => warnings.push({ error, data, method, url }),
+          { outputErrorWarning: (error, data, method, url) => warnings.push({ error, data, method, url }) },
         );
         const route = handleWithWarning(def.get("/:id", "", outputSchema), () => ({
           title: "Valid",
@@ -495,17 +496,12 @@ describe("RouteHandler", () => {
       });
 
       test("promise rejection in JSON path returns 500", async () => {
-        const spy = spyOn(console, "error").mockImplementation(() => {});
-        try {
-          const route = handle(def.get("/:id", "", outputSchema), () => ({
-            title: "Hello",
-            content: new Promise<string>((_, reject) => reject(new Error("async failure"))),
-          }));
-          const res = await route.handlerWrapped(new Request("https://example.com/1"));
-          expect(res.status).toBe(500);
-        } finally {
-          spy.mockRestore();
-        }
+        const route = handle(def.get("/:id", "", outputSchema), () => ({
+          title: "Hello",
+          content: new Promise<string>((_, reject) => reject(new Error("async failure"))),
+        }));
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(500);
       });
 
       test("outputErrorWarning fires for sync handler returning wrong type", async () => {
@@ -513,7 +509,7 @@ describe("RouteHandler", () => {
         const handleWithWarning = RouteHandlerDefiner(
           async () => "ok",
           async () => ({}),
-          (error, data) => warnings.push({ error, data }),
+          { outputErrorWarning: (error, data) => warnings.push({ error, data }) },
         );
         const route = handleWithWarning(def.get("/:id", "", outputSchema), () => ({
           title: "Hello",
@@ -620,6 +616,7 @@ describe("RouteHandler", () => {
     const handle = RouteHandlerDefiner(
       async () => "ok",
       async () => ({}),
+      { errorLogger: () => {} },
     );
 
     test("handler throwing NotFoundError returns 404", async () => {
@@ -639,16 +636,11 @@ describe("RouteHandler", () => {
     });
 
     test("handler throwing a generic Error returns 500", async () => {
-      const spy = spyOn(console, "error").mockImplementation(() => {});
-      try {
-        const route = handle(def.get("/:id", "", z.object({})), () => {
-          throw new Error("something went wrong");
-        });
-        const res = await route.handlerWrapped(new Request("https://example.com/1"));
-        expect(res.status).toBe(500);
-      } finally {
-        spy.mockRestore();
-      }
+      const route = handle(def.get("/:id", "", z.object({})), () => {
+        throw new Error("something went wrong");
+      });
+      const res = await route.handlerWrapped(new Request("https://example.com/1"));
+      expect(res.status).toBe(500);
     });
   });
 });

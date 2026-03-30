@@ -1,5 +1,4 @@
 import type { ServerWebSocket } from "bun";
-import { logFileChangeWatcher, readLogfile } from "./logger.ts";
 import type { Router } from "./index.ts";
 import { VerboseErrorOutput } from "./env.ts";
 
@@ -69,6 +68,8 @@ export const serveHotBuns = async (
   },
   r: Router,
   accessLog: (duration: number, req: Request, res: Response | undefined) => void = accessLogDefault,
+  readLogs?: () => Promise<string>,
+  watchLogs?: (onChange: () => void) => void,
 ): Promise<() => void> => {
   let wsc: ServerWebSocket<unknown>[] = [];
   const sendReload = () => {
@@ -124,13 +125,13 @@ export const serveHotBuns = async (
     },
     websocket: {
       async message(ws, _message) {
-        if (VerboseErrorOutput) ws.send(await readLogfile());
+        if (VerboseErrorOutput && readLogs) ws.send(await readLogs());
       }, // a message is received
       open(ws) {
-        if (VerboseErrorOutput) {
+        if (VerboseErrorOutput && readLogs && watchLogs) {
           wsc.push(ws);
-          logFileChangeWatcher(async () => {
-            ws.send(await readLogfile());
+          watchLogs(async () => {
+            ws.send(await readLogs());
           });
         }
       }, // a socket is opened

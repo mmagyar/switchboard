@@ -83,10 +83,49 @@ type FilterNonOptionalSegments<T extends string[]> = T extends []
       : []
     : [];
 
-//TODO add possibility to parse query string definitions as well
-export type PathToMandatoryKeys<T extends string> = FilterNonOptionalSegments<Split<T>>;
-export type PathToOptionalKeys<T extends string> = FilterOptionalSegments<Split<T>>;
-export type PathToAllKeys<T extends string> = FilterColonSegments<Split<T>>;
+/**
+ * Returns the path portion of a route definition string, stripping any query string.
+ * A `?` that is NOT at the end of the string and NOT immediately followed by `/`
+ * is treated as the query-string separator. Optional path param markers (`/:param?`)
+ * are preserved because their `?` IS followed by `/` or end-of-string.
+ *
+ * Uses `${infer H}?${infer Rest}` which splits on the FIRST `?`.
+ * When `Rest` starts with `/` or is empty the `?` is an optional-param marker and
+ * we keep accumulating. Otherwise, we have found the query-string separator.
+ */
+type GetPathPart<T extends string, Acc extends string = ""> = T extends `${infer H}?${infer Rest}`
+  ? Rest extends "" | `/${string}`
+    ? GetPathPart<Rest, `${Acc}${H}?`>
+    : `${Acc}${H}`
+  : `${Acc}${T}`;
+
+/**
+ * Returns the raw query string declared in a route definition (everything after
+ * the query-string separator `?`), or `""` if there is none.
+ *
+ * Uses `${string}?${infer Rest}` which is GREEDY — `${string}` matches up to the
+ * LAST `?` in the string. If that last `?` is at end-of-string or followed by `/`
+ * (i.e. it is an optional-param marker), there is no declared query string.
+ */
+type GetQueryPart<T extends string> = T extends `${string}?${infer Rest}`
+  ? Rest extends "" | `/${string}`
+    ? ""
+    : Rest
+  : "";
+
+/** Splits `"key1&key2&key3"` into `["key1", "key2", "key3"]`. */
+type ExtractQueryKeys<Q extends string> = Q extends ""
+  ? []
+  : Q extends `${infer K}&${infer Rest}`
+    ? [K, ...ExtractQueryKeys<Rest>]
+    : [Q];
+
+/** The query-param keys declared in a route definition URL (after the `?` separator). */
+export type QueryParamKeys<T extends string> = ExtractQueryKeys<GetQueryPart<T>>;
+
+export type PathToMandatoryKeys<T extends string> = FilterNonOptionalSegments<Split<GetPathPart<T>>>;
+export type PathToOptionalKeys<T extends string> = FilterOptionalSegments<Split<GetPathPart<T>>>;
+export type PathToAllKeys<T extends string> = FilterColonSegments<Split<GetPathPart<T>>>;
 
 // So we can handle ids with number type
 export type FilterByIdEnding<T extends string[], K extends boolean = true> = T extends [
@@ -96,6 +135,36 @@ export type FilterByIdEnding<T extends string[], K extends boolean = true> = T e
   ? (F extends `${string}_id` | `${string}Id` ? K : K extends true ? false : true) extends true
     ? [F, ...FilterByIdEnding<R, K>]
     : FilterByIdEnding<R, K>
+  : [];
+
+/**
+ * Extracts the schema key (the URL query-param name) from a raw declaration.
+ * `"page=:page"` → `"page"`;  `"limit=:limitId"` → `"limit"`;  `"page"` → `"page"`.
+ */
+export type QueryKeyOf<S extends string> = S extends `${infer K}=:${string}` ? K : S;
+
+/**
+ * Extracts the placeholder name used for type derivation from a raw declaration.
+ * `"page=:page"` → `"page"`;  `"limit=:limitId"` → `"limitId"`;  `"page"` → `"page"`.
+ */
+export type QueryPlaceholderOf<S extends string> = S extends `${string}=:${infer P}` ? P : S;
+
+/**
+ * Filters a list of raw query-param declarations by whether the placeholder name has
+ * an `Id` / `_id` suffix (which signals a numeric type).
+ *
+ * K=true  → keep the Id-suffixed ones (map each to its schema key)  → ZodNumber
+ * K=false → keep the non-Id-suffixed ones (map each to its schema key) → ZodString
+ *
+ * Works with both `"key=:placeholder"` and bare `"key"` declarations.
+ */
+export type FilterQueryById<Decls extends string[], K extends boolean = true> = Decls extends [
+  infer F extends string,
+  ...infer R extends string[],
+]
+  ? (QueryPlaceholderOf<F> extends `${string}Id` | `${string}_id` ? K : K extends true ? false : true) extends true
+    ? [QueryKeyOf<F>, ...FilterQueryById<R, K>]
+    : FilterQueryById<R, K>
   : [];
 
 type IsValidOptionalSegments<S extends string[]> = S extends []
@@ -110,4 +179,5 @@ type IsValidOptionalSegments<S extends string[]> = S extends []
       : IsValidOptionalSegments<Rest>
     : true;
 
-export type ValidateOptionalUrl<T extends string> = IsValidOptionalSegments<Split<T>> extends true ? T : never;
+export type ValidateOptionalUrl<T extends string> =
+  IsValidOptionalSegments<Split<GetPathPart<T>>> extends true ? T : never;

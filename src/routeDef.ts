@@ -1,11 +1,19 @@
 import type { ZodNumber, ZodOptional, ZodString, ZodType } from "zod";
 import { z, ZodObject } from "zod";
 import type { HTTPMethods, HTTPMethodsWithBody, HTTPMethodsWithoutBody } from "./staticDefs.ts";
-import type { FilterByIdEnding, PathToMandatoryKeys, PathToOptionalKeys, ValidateOptionalUrl } from "./urlType.ts";
+import type {
+  FilterByIdEnding,
+  FilterQueryById,
+  PathToMandatoryKeys,
+  PathToOptionalKeys,
+  QueryParamKeys,
+  ValidateOptionalUrl,
+} from "./urlType.ts";
 import {
   extractMandatoryParamNames,
   extractOptionalParamNames,
   extractParamNames,
+  extractQueryParamDecls,
   getIdNames,
   getNonIdNames,
 } from "./urlUtils.ts";
@@ -195,7 +203,9 @@ export type UrlParamsSchema<T extends string> = z.ZodObject<
   Record<FilterByIdEnding<PathToMandatoryKeys<T>>[number], ZodNumber> &
     Record<FilterByIdEnding<PathToMandatoryKeys<T>, false>[number], ZodString> &
     Record<FilterByIdEnding<PathToOptionalKeys<T>>[number], ZodOptional<ZodNumber>> &
-    Record<FilterByIdEnding<PathToOptionalKeys<T>, false>[number], ZodOptional<ZodString>>
+    Record<FilterByIdEnding<PathToOptionalKeys<T>, false>[number], ZodOptional<ZodString>> &
+    Record<FilterQueryById<QueryParamKeys<T>>[number], ZodOptional<ZodNumber>> &
+    Record<FilterQueryById<QueryParamKeys<T>, false>[number], ZodOptional<ZodString>>
 >;
 
 export function urlToZodSchema<T extends string>(url: ValidateOptionalUrl<T>): UrlParamsSchema<T> {
@@ -224,5 +234,19 @@ export function urlToZodSchema<T extends string>(url: ValidateOptionalUrl<T>): U
     optionalsNonId[param] = z.optional(z.string());
   }
 
-  return z.object({ ...paramsId, ...paramsNonId, ...optionalsId, ...optionalsNonId });
+  const queryDecls = extractQueryParamDecls(url);
+  type QueryId = FilterQueryById<QueryParamKeys<T>>[number];
+  type QueryNonId = FilterQueryById<QueryParamKeys<T>, false>[number];
+  // Use a single object so insertion order (= declaration order in the URL) is preserved.
+  const queryShape = {} as Record<QueryId, ZodOptional<ZodNumber>> & Record<QueryNonId, ZodOptional<ZodString>>;
+
+  for (const { key, placeholder } of queryDecls) {
+    if (getIdNames([placeholder]).length > 0) {
+      (queryShape as Record<QueryId, ZodOptional<ZodNumber>>)[key as QueryId] = z.optional(z.number());
+    } else {
+      (queryShape as Record<QueryNonId, ZodOptional<ZodString>>)[key as QueryNonId] = z.optional(z.string());
+    }
+  }
+
+  return z.object({ ...paramsId, ...paramsNonId, ...optionalsId, ...optionalsNonId, ...queryShape });
 }

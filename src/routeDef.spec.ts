@@ -149,3 +149,88 @@ test("if a part ends with _id it will be parsed as number", () => {
   expect(withCamelCase.shape.meId.isOptional()).toBe(true);
   expect(withCamelCase.shape.them).toBeInstanceOf(ZodOptional);
 });
+
+describe("query param auto-schema from URL definition", () => {
+  test("no query params declared — schema has only path params", () => {
+    const schema = urlToZodSchema("/items/:id");
+    expect(keys(schema.shape)).toStrictEqual(["id"]);
+  });
+
+  test("single optional string query param", () => {
+    const schema = urlToZodSchema("/items?page");
+    expect(keys(schema.shape)).toContain("page");
+    expect(schema.shape.page).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.page.def.innerType).toBeInstanceOf(ZodString);
+    expect(schema.shape.page.isOptional()).toBe(true);
+  });
+
+  test("query param with Id suffix becomes optional number", () => {
+    const schema = urlToZodSchema("/items?categoryId");
+    expect(schema.shape.categoryId).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.categoryId.def.innerType).toBeInstanceOf(ZodNumber);
+  });
+
+  test("multiple query params", () => {
+    const schema = urlToZodSchema("/items?page&limit");
+    expect(keys(schema.shape)).toContain("page");
+    expect(keys(schema.shape)).toContain("limit");
+    expect(schema.shape.page).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.limit).toBeInstanceOf(ZodOptional);
+  });
+
+  test("path params and query params combined", () => {
+    const schema = urlToZodSchema("/items/:categoryId?page&limit");
+    expect(keys(schema.shape)).toContain("categoryId");
+    expect(keys(schema.shape)).toContain("page");
+    expect(keys(schema.shape)).toContain("limit");
+    // path param is a mandatory number (Id suffix)
+    expect(schema.shape.categoryId).toBeInstanceOf(ZodNumber);
+    expect(schema.shape.categoryId.isOptional()).toBe(false);
+    // query params are optional strings
+    expect(schema.shape.page).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.page.def.innerType).toBeInstanceOf(ZodString);
+    expect(schema.shape.limit).toBeInstanceOf(ZodOptional);
+  });
+
+  test("def.get with declared query params does not throw", () => {
+    expect(() => def.get("/items/:id?page&limit", "admin", z.object({}))).not.toThrow();
+  });
+
+  test("def.get with declared query params — handler receives typed query params", () => {
+    // This is a compile-time check: the schema inferred from the URL must include 'page'.
+    const route = def.get("/items/:id?page", "admin", z.object({}));
+    const parsed = route.paramsValidation.safeParse({ id: "1", page: "2" });
+    expect(parsed.success).toBe(true);
+    // page is optional — omitting it should also be valid
+    const parsedWithoutPage = route.paramsValidation.safeParse({ id: "1" });
+    expect(parsedWithoutPage.success).toBe(true);
+  });
+
+  test("key=:placeholder — key becomes the schema key, placeholder determines the type", () => {
+    // ?limit=:limitId → schema key is "limit", type is number (Id suffix on placeholder)
+    const schema = urlToZodSchema("/items?limit=:limitId");
+    expect(keys(schema.shape)).toContain("limit");
+    expect(schema.shape.limit).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.limit.def.innerType).toBeInstanceOf(ZodNumber);
+  });
+
+  test("key=:placeholder — non-Id placeholder gives string type", () => {
+    const schema = urlToZodSchema("/items?page=:page");
+    expect(schema.shape.page).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.page.def.innerType).toBeInstanceOf(ZodString);
+  });
+
+  test("mixed path params and key=:placeholder query params", () => {
+    const schema = urlToZodSchema("/items/:categoryId?page=:page&limit=:limitId");
+    expect(keys(schema.shape)).toStrictEqual(["categoryId", "page", "limit"]);
+    expect(schema.shape.categoryId).toBeInstanceOf(ZodNumber); // mandatory path param
+    expect(schema.shape.page).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.page.def.innerType).toBeInstanceOf(ZodString);
+    expect(schema.shape.limit).toBeInstanceOf(ZodOptional);
+    expect(schema.shape.limit.def.innerType).toBeInstanceOf(ZodNumber); // placeholder limitId → number
+  });
+
+  test("def.get with key=:placeholder syntax does not throw", () => {
+    expect(() => def.get("/items/:id?page=:page&limit=:limitId", "admin", z.object({}))).not.toThrow();
+  });
+});

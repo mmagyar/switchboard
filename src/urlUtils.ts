@@ -9,11 +9,30 @@ import type {
 import type { z, ZodType, ZodTypeAny } from "zod";
 import type { RouteBase } from "./routeBaseType.ts";
 
-export const decomposeUrl = (route: string): string[] => {
-  if (route.endsWith("/")) {
-    return route.substring(0, route.length - 1).split("/");
+/**
+ * Strips the declared query string from a route definition string.
+ * A `?` followed by anything other than `/` or end-of-string is treated as
+ * the query-string separator; everything from that `?` onwards is removed.
+ * Optional path-param markers (`:param?`) are preserved because their `?`
+ * is followed by `/` or end-of-string.
+ */
+export const stripQueryFromRoute = (url: string): string => {
+  for (let i = 0; i < url.length; i++) {
+    if (url[i] === "?") {
+      const next = url[i + 1];
+      if (next === undefined || next === "/") continue;
+      return url.slice(0, i);
+    }
   }
-  return route.split("/");
+  return url;
+};
+
+export const decomposeUrl = (route: string): string[] => {
+  const pathOnly = stripQueryFromRoute(route);
+  if (pathOnly.endsWith("/")) {
+    return pathOnly.substring(0, pathOnly.length - 1).split("/");
+  }
+  return pathOnly.split("/");
 };
 
 export const checkRouteOptionalParameterOrder = <T extends string>(route: T): route is ValidateOptionalUrl<T> => {
@@ -49,6 +68,48 @@ export const extractParamNames = <T extends string>(route: ValidateOptionalUrl<T
     .filter((x) => x.startsWith(":"))
     .map((x) => (x.endsWith("?") ? x.slice(1, -1) : x.substring(1))) as PathToAllKeys<T>;
 };
+
+/** Parse a raw query-param declaration into its schema key and type-derivation placeholder. */
+const parseQueryParamDecl = (raw: string): { key: string; placeholder: string } => {
+  const eqIdx = raw.indexOf("=");
+  if (eqIdx !== -1 && raw[eqIdx + 1] === ":") {
+    return { key: raw.slice(0, eqIdx), placeholder: raw.slice(eqIdx + 2) };
+  }
+  return { key: raw, placeholder: raw };
+};
+
+const extractRawQueryParts = (url: string): string[] => {
+  for (let i = 0; i < url.length; i++) {
+    if (url[i] === "?") {
+      const next = url[i + 1];
+      if (next === undefined || next === "/") continue;
+      return url
+        .slice(i + 1)
+        .split("&")
+        .filter((k) => k.length > 0);
+    }
+  }
+  return [];
+};
+
+/**
+ * Extracts the schema key names declared in a route definition URL's query string.
+ * Supports both `"key=:placeholder"` and bare `"key"` syntax.
+ * E.g. `"/items/:id?page=:page&limit=:limitId"` → `["page", "limit"]`.
+ */
+export const extractQueryParamNames = (url: string): string[] =>
+  extractRawQueryParts(url).map((raw) => parseQueryParamDecl(raw).key);
+
+/**
+ * Extracts the full query-param declarations from a route definition URL.
+ * Each entry contains:
+ *   - `key`         — the actual URL query-param name (also the schema key)
+ *   - `placeholder` — the name used for type derivation (Id/non-Id suffix convention)
+ * E.g. `"/items/:id?page=:page&limit=:limitId"` →
+ *   `[{ key: "page", placeholder: "page" }, { key: "limit", placeholder: "limitId" }]`
+ */
+export const extractQueryParamDecls = (url: string): { key: string; placeholder: string }[] =>
+  extractRawQueryParts(url).map(parseQueryParamDecl);
 
 export const getIdNames = <T extends string[]>(keys: T): FilterByIdEnding<T> => {
   return keys.filter((x) => x.endsWith("_id") || x.endsWith("Id")) as FilterByIdEnding<T>;

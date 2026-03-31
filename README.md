@@ -132,7 +132,7 @@ def.del(path, permissionsNeeded, outputSchema, paramsSchema)
 def.options(path, permissionsNeeded, outputSchema, paramsSchema?)
 ```
 
-If no `paramsSchema` is provided, one is derived automatically from the path template (e.g. `/:id` → `{ id: z.number() }`).
+If no `paramsSchema` is provided, one is derived automatically from the path template and any declared query params (e.g. `/:id?page` → `{ id: z.number(), page: z.optional(z.string()) }`).
 
 ---
 
@@ -314,7 +314,9 @@ Auth is only applied when `authTokenOverride` is explicitly set to a non-null st
 
 ---
 
-## Path parameter conventions
+## Path and query parameter conventions
+
+### Path params
 
 Path segments starting with `:` are extracted as route parameters. Segments ending in `Id` (camelCase) or `_id` (snake_case) are parsed as numbers; all others are kept as strings.
 
@@ -324,6 +326,48 @@ Path segments starting with `:` are extracted as route parameters. Segments endi
 /users/:username          → { username: z.string() }
 /items/:itemId?           → { itemId: z.optional(z.number()) }
 ```
+
+### Query params
+
+Query params can be declared directly in the route definition URL using `key=:placeholder` syntax. The `:placeholder` name follows the same `Id`/`_id` convention as path params to determine the Zod type. All declared query params are always optional.
+
+```
+/items?page=:page          → { page: z.optional(z.string()) }
+/items?limit=:limitId      → { limit: z.optional(z.number()) }
+/items/:categoryId?page=:page&limit=:limitId
+                           → { categoryId: z.number(),
+                               page:       z.optional(z.string()),
+                               limit:      z.optional(z.number()) }
+```
+
+The key (before `=`) is the real URL query-param name and the schema key. The `:placeholder` name after `=:` is used only for type derivation — key and placeholder can differ:
+
+```
+?limit=:limitId   →  URL key "limit",  type number  (placeholder limitId has Id suffix)
+?page=:page       →  URL key "page",   type string
+```
+
+Bare `?key` is accepted as shorthand for `?key=:key`:
+
+```
+?page             →  same as  ?page=:page    (string)
+?limitId          →  same as  ?limitId=:limitId  (number)
+```
+
+The route definition deliberately resembles a real URL. Compare the definition with an actual request:
+
+```
+definition:  /items/:categoryId?page=:page&limit=:limitId
+real URL:    /items/5?page=2&limit=10
+```
+
+The `?` that separates the path from declared query params is identified as the first `?` not immediately followed by `/` or end-of-string. Optional path-param markers (`/:slug?`) are unambiguous because their `?` is always followed by `/` or end-of-string.
+
+> **Limitation:** combining optional path params (`/:name?`) with auto-declared query params in the same URL string is not supported. Provide `paramsValidation` manually for that case.
+
+When a `paramsValidation` schema is passed explicitly to `def.get()` (etc.), the URL query-string declaration is ignored entirely and the provided schema is used as-is.
+
+All query params sent by a client are parsed from `url.searchParams` regardless of whether they are declared in the route URL — the declaration only affects the auto-generated Zod schema and the inferred `params` type in the handler.
 
 ---
 
@@ -358,4 +402,6 @@ Neither can be used as a drop-in path matcher decoupled from a specific server s
 
 - **TLS cert domain change**: The auto-generated self-signed cert (`"generate"` option) is cached in `.genCert`. If the domain name changes, delete that file manually to force regeneration.
 
-- **Query string type-level validation**: The `ValidateOptionalUrl` type constraint only validates path segment syntax. It does not validate query string parameter definitions at the type level.
+- **Query string type-level validation**: The `ValidateOptionalUrl` type constraint only validates path segment syntax. It does not validate query string parameter names at the type level.
+
+- **Optional path param + auto query params**: Combining an optional path param (`/:name?`) with auto-declared query params in the same URL string is not supported. The first `?` not followed by `/` or end-of-string is always treated as the query-string separator, making the preceding param mandatory. Use a manual `paramsValidation` schema for this case.

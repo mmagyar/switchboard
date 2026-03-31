@@ -1,6 +1,6 @@
 import type { ValidateOptionalUrl } from "./urlType.ts";
 import { parseHTTPMethod, RequestError, type HTTPMethods } from "./staticDefs.ts";
-import { checkRouteOptionalParameterOrder, decomposeUrl } from "./urlUtils.ts";
+import { checkRouteOptionalParameterOrder, decomposeUrl, stripQueryFromRoute } from "./urlUtils.ts";
 
 type StoredRoute = {
   method: HTTPMethods;
@@ -108,7 +108,8 @@ export class Router {
     handler: (req: Request) => Promise<Response> | Response,
   ) {
     checkRouteOptionalParameterOrder(route);
-    const normalized = route.startsWith("/") ? route : `/${route}`;
+    const pathOnly = stripQueryFromRoute(route);
+    const normalized = pathOnly.startsWith("/") ? pathOnly : `/${pathOnly}`;
     const key = `${method}:${normalized}`;
     if (this.registeredRoutes.has(key)) {
       throw new Error(`Duplicate route: ${method.toUpperCase()} ${normalized}`);

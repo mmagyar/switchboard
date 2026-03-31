@@ -4,8 +4,11 @@ import {
   extractMandatoryParamNames,
   extractOptionalParamNames,
   extractParamNames,
+  extractQueryParamDecls,
+  extractQueryParamNames,
   getIdNames,
   getNonIdNames,
+  stripQueryFromRoute,
 } from "./urlUtils.ts";
 import { z } from "zod";
 
@@ -371,5 +374,76 @@ describe("defToGetUrl", () => {
         "spaced out": undefined,
       }),
     ).toBe("/testpath");
+  });
+});
+
+describe("extractQueryParamNames", () => {
+  test("returns empty array when no query string is declared", () => {
+    expect(extractQueryParamNames("/items")).toStrictEqual([]);
+    expect(extractQueryParamNames("/items/:id")).toStrictEqual([]);
+    expect(extractQueryParamNames("/items/:id?")).toStrictEqual([]);
+    expect(extractQueryParamNames("/items/:id?/:slug?")).toStrictEqual([]);
+  });
+
+  test("returns single query param key", () => {
+    expect(extractQueryParamNames("/items?page")).toStrictEqual(["page"]);
+    expect(extractQueryParamNames("/items/:id?page")).toStrictEqual(["page"]);
+  });
+
+  test("returns multiple query param keys", () => {
+    expect(extractQueryParamNames("/items?page&limit")).toStrictEqual(["page", "limit"]);
+    expect(extractQueryParamNames("/items/:id?page&limit&sort")).toStrictEqual(["page", "limit", "sort"]);
+  });
+
+  test("preserves Id-suffix keys as-is (caller applies the naming convention)", () => {
+    expect(extractQueryParamNames("/items?categoryId&page")).toStrictEqual(["categoryId", "page"]);
+    expect(extractQueryParamNames("/items?category_id")).toStrictEqual(["category_id"]);
+  });
+
+  test("optional path params before the query string are not included", () => {
+    expect(extractQueryParamNames("/items/:name?/page?page&limit")).toStrictEqual(["page", "limit"]);
+  });
+});
+
+describe("extractQueryParamDecls", () => {
+  test("bare key — key and placeholder are the same", () => {
+    expect(extractQueryParamDecls("/items?page")).toStrictEqual([{ key: "page", placeholder: "page" }]);
+    expect(extractQueryParamDecls("/items?limitId")).toStrictEqual([{ key: "limitId", placeholder: "limitId" }]);
+  });
+
+  test("key=:placeholder syntax — key and placeholder differ", () => {
+    expect(extractQueryParamDecls("/items?page=:page")).toStrictEqual([{ key: "page", placeholder: "page" }]);
+    expect(extractQueryParamDecls("/items?limit=:limitId")).toStrictEqual([{ key: "limit", placeholder: "limitId" }]);
+  });
+
+  test("multiple declarations", () => {
+    expect(extractQueryParamDecls("/items?page=:page&limit=:limitId")).toStrictEqual([
+      { key: "page", placeholder: "page" },
+      { key: "limit", placeholder: "limitId" },
+    ]);
+  });
+
+  test("returns empty array when no query string is declared", () => {
+    expect(extractQueryParamDecls("/items")).toStrictEqual([]);
+    expect(extractQueryParamDecls("/items/:id")).toStrictEqual([]);
+  });
+});
+
+describe("stripQueryFromRoute", () => {
+  test("returns path unchanged when there is no query string", () => {
+    expect(stripQueryFromRoute("/items")).toBe("/items");
+    expect(stripQueryFromRoute("/items/:id")).toBe("/items/:id");
+    expect(stripQueryFromRoute("/items/:id?")).toBe("/items/:id?");
+    expect(stripQueryFromRoute("/items/:id?/:slug?")).toBe("/items/:id?/:slug?");
+  });
+
+  test("strips the declared query string", () => {
+    expect(stripQueryFromRoute("/items?page")).toBe("/items");
+    expect(stripQueryFromRoute("/items/:id?page&limit")).toBe("/items/:id");
+    expect(stripQueryFromRoute("/items?page&limit&sort")).toBe("/items");
+  });
+
+  test("preserves optional path param markers before the query sep", () => {
+    expect(stripQueryFromRoute("/items/:name?/sub?page")).toBe("/items/:name?/sub");
   });
 });

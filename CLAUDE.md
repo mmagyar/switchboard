@@ -115,13 +115,43 @@ const response = await router.handleRequest(req);
 
 #### URL Parameter Auto-Schema
 
-When no `paramsValidation` is passed to `def.get()` (etc.), `urlToZodSchema` auto-generates one:
+When no `paramsValidation` is passed to `def.get()` (etc.), `urlToZodSchema` auto-generates one from both the path params and any query params declared in the URL string.
+
+**Path params** (`:segment` syntax):
 - `:fooId` → `z.number()`
 - `:foo` → `z.string()`
 - `:fooId?` → `z.optional(z.number())`
 - `:foo?` → `z.optional(z.string())`
 
 Optional params must come after mandatory params in the path — this is enforced at route registration.
+
+**Query params** (declared after `?` in the route definition string):
+
+Use `key=:placeholder` syntax — the same `:placeholder` naming convention as path params:
+- `?page=:page` → `z.optional(z.string())`
+- `?limit=:limitId` → `z.optional(z.number())` (placeholder `limitId` has `Id` suffix)
+
+The URL key (before `=`) and the placeholder name (after `=:`) can differ — the key is what appears in real URLs and becomes the schema key; the placeholder name is used only for type derivation:
+- `?limit=:limitId` → schema key `limit`, type `z.optional(z.number())`
+
+Bare `?key` is also accepted as shorthand for `?key=:key` (the key doubles as placeholder):
+- `?page` → `z.optional(z.string())`
+- `?limitId` → `z.optional(z.number())`
+
+Query params are always optional in the auto-schema. Declare them using URL query-string syntax appended to the path:
+
+```ts
+def.get("/items/:categoryId?page=:page&limit=:limitId", "user", outputSchema)
+// auto-generates:
+// { categoryId: z.number(), page: z.optional(z.string()), limit: z.optional(z.number()) }
+```
+
+The route definition deliberately resembles a real URL — compare with an actual request:
+`/items/5?page=2&limit=10`
+
+The `?` that separates the path from declared query params is the first `?` not immediately followed by `/` or end-of-string. Optional path-param markers (`/:param?`) are unambiguous because their `?` is always followed by `/` or end-of-string.
+
+> **Limitation:** combining optional path params (`/:name?`) with auto-declared query params in the same URL string is not supported — the `?` is consumed as the query-string separator. Provide `paramsValidation` manually for that case.
 
 #### Streaming SSR Support
 

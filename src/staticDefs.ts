@@ -19,11 +19,7 @@ export const httpMethodSuccessCodes = {
 export type HTTPMethodsWithBody = keyof typeof httpMethodWithBodySuccessCodes;
 export type HTTPMethodsWithoutBody = keyof typeof httpMethodWithoutBodySuccessCodes;
 export type HTTPMethods = keyof typeof httpMethodSuccessCodes;
-export const parseHTTPMethod = (methodIn: string): HTTPMethods => {
-  const method = methodIn.toLowerCase();
-  if (method in httpMethodSuccessCodes) return method as HTTPMethods;
-  throw new Error(`Invalid HTTP method: ${method}`);
-};
+
 export class RequestError extends Error {
   constructor(
     public readonly status: number,
@@ -32,6 +28,12 @@ export class RequestError extends Error {
     super(message);
   }
 }
+
+export const parseHTTPMethod = (methodIn: string): HTTPMethods => {
+  const method = methodIn.toLowerCase();
+  if (method in httpMethodSuccessCodes) return method as HTTPMethods;
+  throw new RequestError(405, `Method Not Allowed: ${methodIn}`);
+};
 
 /***
  * Throw this when you want to trigger a 404 response

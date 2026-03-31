@@ -1,5 +1,5 @@
 import type { ValidateOptionalUrl } from "./urlType.ts";
-import { parseHTTPMethod, type HTTPMethods } from "./staticDefs.ts";
+import { parseHTTPMethod, RequestError, type HTTPMethods } from "./staticDefs.ts";
 import { checkRouteOptionalParameterOrder, decomposeUrl } from "./urlUtils.ts";
 
 type StoredRoute = {
@@ -112,12 +112,31 @@ export class Router {
     return trieLookup(this.root, segments, 0, method);
   }
 
-  handleRequest(req: Request): Promise<Response> | Response {
+  async handleRequest(req: Request): Promise<Response> {
+    let method: HTTPMethods;
+    try {
+      method = parseHTTPMethod(req.method);
+    } catch (e) {
+      if (e instanceof RequestError) {
+        return new Response(e.message, { status: e.status });
+      }
+      throw e;
+    }
+
     const url = new URL(req.url);
-    const route = this.getRoute(parseHTTPMethod(req.method), url);
+    const route = this.getRoute(method, url);
     if (route) {
       return route.handler(req);
     }
+
+    if (method === "head") {
+      const getRoute = this.getRoute("get", url);
+      if (getRoute) {
+        const res = await getRoute.handler(req);
+        return new Response(null, { status: res.status, headers: res.headers });
+      }
+    }
+
     return this.defaultRoute(req);
   }
 }

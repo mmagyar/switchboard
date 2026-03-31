@@ -10,7 +10,6 @@
     "module": "NodeNext",
     "moduleDetection": "auto",
     "jsx": "react-jsx",
-    "allowJs": true,
     "esModuleInterop": true,
     "declaration": true,
     //My opts
@@ -51,9 +50,7 @@
     //This is just too much overhead for very little gain
     "exactOptionalPropertyTypes": false,
 
-    /* Preact Config */
-    "jsxImportSource": "preact",
     "baseUrl": ".",
-    "paths": {}
-  }
+    "paths": {},
+  },
 }

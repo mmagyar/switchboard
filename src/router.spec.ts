@@ -172,3 +172,51 @@ test("trie: different methods on same path are independent", async () => {
   expect(await (await r.getRoute("post", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("POST");
   expect(await (await r.getRoute("delete", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("DELETE");
 });
+
+test("HEAD falls back to GET handler, preserving status and headers with no body", async () => {
+  const r = new Router();
+  r.addRoute(
+    "get",
+    "/resource",
+    () =>
+      new Response("GET body", {
+        status: 200,
+        headers: { "X-Custom": "header-value", "Content-Type": "text/plain" },
+      }),
+  );
+  const res = await r.handleRequest(new Request("https://example.com/resource", { method: "HEAD" }));
+  expect(res.status).toBe(200);
+  expect(res.headers.get("X-Custom")).toBe("header-value");
+  expect(await res.text()).toBe("");
+});
+
+test("HEAD uses registered HEAD handler directly when one exists", async () => {
+  const r = new Router();
+  r.addRoute("head", "/resource", () => new Response(null, { status: 204, headers: { "X-From": "head-handler" } }));
+  r.addRoute("get", "/resource", () => new Response("GET body", { headers: { "X-From": "get-handler" } }));
+  const res = await r.handleRequest(new Request("https://example.com/resource", { method: "HEAD" }));
+  expect(res.status).toBe(204);
+  expect(res.headers.get("X-From")).toBe("head-handler");
+});
+
+test("HEAD falls through to defaultRoute when no GET handler is registered", async () => {
+  const r = new Router();
+  r.addRoute("get", "/other", () => new Response("other"));
+  const res = await r.handleRequest(new Request("https://example.com/missing", { method: "HEAD" }));
+  expect(res.status).toBe(404);
+});
+
+test("unknown HTTP method returns 405 Method Not Allowed even when a matching path exists", async () => {
+  const r = new Router();
+  r.addRoute("get", "/resource", () => new Response("tea"));
+  // CONNECT is not in our supported method list; the registered GET route must not be reached
+  const res = await r.handleRequest(new Request("https://example.com/resource", { method: "CONNECT" }));
+  expect(res.status).toBe(405);
+  expect(await res.text()).toContain("Method Not Allowed");
+});
+
+test("unknown HTTP method returns 405 even when no routes are registered", async () => {
+  const r = new Router();
+  const res = await r.handleRequest(new Request("https://example.com/anything", { method: "CONNECT" }));
+  expect(res.status).toBe(405);
+});

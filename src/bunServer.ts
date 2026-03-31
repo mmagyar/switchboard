@@ -63,6 +63,7 @@ export const serveHotBuns = async (
     hostname?: string;
     development?: boolean;
     https?: "generate" | { cert: string; key: string };
+    idleTimeout?: number;
   },
   r: Router,
   accessLog: (duration: number, req: Request, res: Response | undefined) => void = accessLogDefault,
@@ -80,7 +81,7 @@ export const serveHotBuns = async (
       port: 80,
       hostname: confIn.hostname || "0.0.0.0",
       development: confIn.development ?? true,
-      idleTimeout: 10,
+      idleTimeout: confIn.idleTimeout ?? 10,
       fetch: async (req): Promise<Response> => {
         //redirect to https:
         const url = new URL(req.url);
@@ -100,7 +101,7 @@ export const serveHotBuns = async (
     port: confIn.port ?? (ssl ? 443 : 80),
     hostname: confIn.hostname || "0.0.0.0",
     development: confIn.development ?? true,
-    idleTimeout: 10,
+    idleTimeout: confIn.idleTimeout ?? 10,
     //generate new CA with openssl on the fly
     tls: ssl,
     fetch: async (req): Promise<Response | undefined> => {

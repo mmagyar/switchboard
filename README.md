@@ -2,6 +2,12 @@
 
 A type-safe router for Bun with Zod validation, permission handling, and streaming SSR support.
 
+## Installation
+
+```sh
+bun add https://github.com/mmagyar/switchboard
+```
+
 ## Features
 
 - Type-safe route definitions with compile-time path validation
@@ -180,6 +186,23 @@ Anything that is not one of these three classes falls through to a generic `500 
 
 If you supply an `errorParser` in `RouteHandlerOptions`, it runs **before** these checks and can override any of them — return `{ status, message }` from it to short-circuit the built-in handling.
 
+#### `ApiError` *(client-side)*
+
+`ApiError` is a proper `Error` subclass thrown by the function returned from `createClient` when the server responds with an HTTP status ≥ 400. It exposes a `.status: number` field so callers can branch on the exact status code:
+
+```typescript
+import { ApiError, createClient } from "switchboard/client";
+
+const call = createClient("https://api.example.com");
+try {
+  const result = await call(myRoute, params);
+} catch (err) {
+  if (err instanceof ApiError) {
+    console.error(`HTTP ${err.status}: ${err.message}`);
+  }
+}
+```
+
 ---
 
 ### `handle(routeDef, handler, formatOutput?)`
@@ -240,6 +263,7 @@ Starts a Bun HTTP(S) server wired to the router, with optional WebSocket hot-rel
 | `conf.hostname` | `"0.0.0.0"` | Bind address |
 | `conf.development` | `true` | Enables Bun development mode |
 | `conf.https` | — | `"generate"` to auto-generate a self-signed cert, or `{ cert, key }` |
+| `conf.idleTimeout` | `10` | Idle connection timeout in seconds passed to `Bun.serve()` |
 | `accessLog` | built-in | Custom access log function `(duration, req, res?) => void` |
 | `readLogs` | — | Optional: `() => Promise<string>` — supplies log content to WebSocket clients |
 | `watchLogs` | — | Optional: `(onChange: () => void) => void` — notifies when logs change |
@@ -250,17 +274,29 @@ Returns a `sendReload` function that pushes a `RELOAD` message to all connected 
 
 ---
 
-### `call(route, params, body?, settings?)` *(client-side)*
+### `createClient(baseUrl, options?)` *(client-side)*
 
-Type-safe fetch wrapper for use in the browser or other HTTP clients.
+Factory that returns a type-safe HTTP client bound to a base URL and shared options.
 
 ```typescript
-import { call, setBaseUrl } from "switchboard/client";
+import { createClient, define } from "switchboard/client";
 
-setBaseUrl("https://api.example.com");
+const call = createClient("https://api.example.com", {
+  onUnauthorized: () => { /* e.g. redirect to login */ },
+});
 
 const result = await call(listRoute, { search: "burger" });
 ```
+
+#### `ClientOptions`
+
+| Field | Description |
+|---|---|
+| `onUnauthorized` | Callback invoked when the server returns `401` or `403`; use to redirect to login |
+
+#### `call(route, params, body?, settings?)`
+
+`createClient` returns a type-safe fetch function directly. For bodyless methods (`get`, `delete`, etc.) the signature is `call(route, params, settings?)`; for body methods (`post`, `put`, `patch`) it is `call(route, params, body, settings?)`.
 
 #### `settings`
 
@@ -269,7 +305,7 @@ const result = await call(listRoute, { search: "burger" });
 | `authTokenOverride` | Set to a bearer token string to add an `Authorization` header; `null` to send no auth |
 | `methodOverride` | Override the HTTP method string |
 | `validateReturn` | Set to `false` to skip Zod parsing of the response (default: `true`) |
-| `baseUrlOverride` | Override the global base URL for this call |
+| `baseUrlOverride` | Override the base URL for this individual call |
 | `withCredentials` | Send cookies with the request |
 
 Auth is only applied when `authTokenOverride` is explicitly set to a non-null string. There is no implicit token source.

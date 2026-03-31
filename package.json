@@ -2,6 +2,34 @@
   "name": "switchboard",
   "version": "0.1.0",
   "type": "module",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "description": "Type-safe Bun router with Zod validation, permission handling, and streaming SSR support",
+  "keywords": [
+    "bun",
+    "router",
+    "zod",
+    "typescript",
+    "type-safe",
+    "http",
+    "ssr",
+    "streaming"
+  ],
+  "author": "mmagyar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mmagyar/switchboard.git"
+  },
+  "homepage": "https://github.com/mmagyar/switchboard#readme",
+  "bugs": {
+    "url": "https://github.com/mmagyar/switchboard/issues"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "@types/bun": "^1.2.20"

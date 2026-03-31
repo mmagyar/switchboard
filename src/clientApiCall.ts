@@ -76,11 +76,25 @@ export const createClient =
         }
         throw new ApiError(response.status, errorText);
       } else {
-        return route.method !== "delete" ? response.json() : undefined;
+        const effectiveMethod = (settings.methodOverride ?? route.method).toLowerCase();
+        if (
+          effectiveMethod === "delete" ||
+          effectiveMethod === "head" ||
+          response.status === 204 ||
+          response.status === 205
+        ) {
+          return undefined;
+        }
+        const contentType = response.headers.get("Content-Type") ?? "";
+        if (contentType.includes("application/json")) {
+          return response.json();
+        }
+        const text = await response.text();
+        return text.length > 0 ? text : undefined;
       }
     });
 
-    if (!((settings.validateReturn ?? true) === false || route.method === "delete")) {
+    if (!((settings.validateReturn ?? true) === false || response === undefined)) {
       return route.outputValidation.parse(response) as z.infer<OUT>;
     }
 

@@ -80,6 +80,28 @@ describe("createClient", () => {
     );
   };
 
+  const mockNoBodyFetch = (status: number): void => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () => new Response(null, { status })) as unknown as typeof globalThis.fetch,
+    );
+  };
+
+  const mockTextFetch = (body: string): void => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "text/plain" },
+        })) as unknown as typeof globalThis.fetch,
+    );
+  };
+
+  const mockEmptyBodyFetch = (): void => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () => new Response("", { status: 200 })) as unknown as typeof globalThis.fetch,
+    );
+  };
+
   // -- URL routing ----------------------------------------------------------
 
   test("uses the provided base URL", async () => {
@@ -241,6 +263,56 @@ describe("createClient", () => {
     const route = def.get("/data", "public", z.object({ value: z.number() }));
     const result = await call(route, {}, undefined, { validateReturn: false });
     expect(result as unknown).toEqual({ wrong: "shape" });
+  });
+
+  // -- No-body and content-type handling ------------------------------------
+
+  test("204 No Content response returns undefined without throwing", async () => {
+    mockNoBodyFetch(204);
+    const call = createClient("http://example.com");
+    const route = def.get("/data", "public", z.object({ value: z.number() }));
+    const result = await call(route, {});
+    expect(result).toBeUndefined();
+  });
+
+  test("205 Reset Content response returns undefined without throwing", async () => {
+    mockNoBodyFetch(205);
+    const call = createClient("http://example.com");
+    const route = def.get("/data", "public", z.object({ value: z.number() }));
+    const result = await call(route, {});
+    expect(result).toBeUndefined();
+  });
+
+  test("methodOverride: HEAD returns undefined without throwing", async () => {
+    mockNoBodyFetch(200);
+    const call = createClient("http://example.com");
+    const route = def.get("/data", "public", z.object({ value: z.number() }));
+    const result = await call(route, {}, undefined, { methodOverride: "HEAD" });
+    expect(result).toBeUndefined();
+  });
+
+  test("DELETE route returns undefined", async () => {
+    mockNoBodyFetch(204);
+    const call = createClient("http://example.com");
+    const route = def.del("/items", "public", z.object({ value: z.number() }));
+    const result = await call(route, {});
+    expect(result).toBeUndefined();
+  });
+
+  test("200 with Content-Type: text/plain returns the body as a plain string", async () => {
+    mockTextFetch("hello world");
+    const call = createClient("http://example.com");
+    const route = def.get("/text", "public", z.string());
+    const result = await call(route, {});
+    expect(result).toBe("hello world");
+  });
+
+  test("200 with an empty body returns undefined without throwing", async () => {
+    mockEmptyBodyFetch();
+    const call = createClient("http://example.com");
+    const route = def.get("/data", "public", z.object({ value: z.number() }));
+    const result = await call(route, {});
+    expect(result).toBeUndefined();
   });
 
   // -- Credentials ----------------------------------------------------------

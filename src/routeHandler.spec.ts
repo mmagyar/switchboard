@@ -504,6 +504,52 @@ describe("RouteHandler", () => {
         expect(res.status).toBe(500);
       });
 
+      describe("array output with promise elements", () => {
+        test("array of promises resolves to array, not a numeric-keyed object", async () => {
+          const arraySchema = z.array(z.string());
+          const route = handle(def.get("/:id", "", arraySchema), () => [
+            Promise.resolve("a"),
+            Promise.resolve("b"),
+            Promise.resolve("c"),
+          ]);
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          const body = await res.json();
+          expect(Array.isArray(body)).toBe(true);
+          expect(body).toEqual(["a", "b", "c"]);
+        });
+
+        test("mixed array (plain values and promises) preserves order and shape", async () => {
+          const arraySchema = z.array(z.string());
+          const route = handle(def.get("/:id", "", arraySchema), () => ["first", Promise.resolve("second"), "third"]);
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          const body = await res.json();
+          expect(Array.isArray(body)).toBe(true);
+          expect(body).toEqual(["first", "second", "third"]);
+        });
+
+        test("array without any promises is not affected by array resolution path", async () => {
+          const arraySchema = z.array(z.string());
+          const route = handle(def.get("/:id", "", arraySchema), () => ["x", "y", "z"]);
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(200);
+          const body = await res.json();
+          expect(Array.isArray(body)).toBe(true);
+          expect(body).toEqual(["x", "y", "z"]);
+        });
+
+        test("promise rejection inside array returns 500", async () => {
+          const arraySchema = z.array(z.string());
+          const route = handle(def.get("/:id", "", arraySchema), () => [
+            "ok",
+            new Promise<string>((_, reject) => reject(new Error("boom"))),
+          ]);
+          const res = await route.handlerWrapped(new Request("https://example.com/1"));
+          expect(res.status).toBe(500);
+        });
+      });
+
       test("outputErrorWarning fires for sync handler returning wrong type", async () => {
         const warnings: { error: z.ZodError<unknown>; data: unknown }[] = [];
         const handleWithWarning = RouteHandlerDefiner(

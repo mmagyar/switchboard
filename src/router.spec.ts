@@ -105,6 +105,27 @@ test("throws on duplicate route registration", () => {
   expect(() => r.addRoute("post", "/hello", () => new Response("Post"))).not.toThrow();
 });
 
+test("throws when mandatory param conflicts with existing optional param at same position", () => {
+  const r = new Router();
+  r.addRoute("get", "/hello/:id?", () => new Response("OPTIONAL"));
+  expect(() => r.addRoute("get", "/hello/:id", () => new Response("MANDATORY"))).toThrow(/conflicting param edges/i);
+});
+
+test("throws when optional param conflicts with existing mandatory param at same position", () => {
+  const r = new Router();
+  r.addRoute("get", "/hello/:id", () => new Response("MANDATORY"));
+  expect(() => r.addRoute("get", "/hello/:id?", () => new Response("OPTIONAL"))).toThrow(/conflicting param edges/i);
+});
+
+test("throws on mandatory/optional param conflict even across different methods", () => {
+  const r = new Router();
+  r.addRoute("get", "/hello/:id", () => new Response("GET MANDATORY"));
+  // POST route with optional param at the same position still shares the trie node
+  expect(() => r.addRoute("post", "/hello/:id?", () => new Response("POST OPTIONAL"))).toThrow(
+    /conflicting param edges/i,
+  );
+});
+
 test("handleRequest dispatches to the matching handler", async () => {
   const r = new Router();
   r.addRoute("get", "/hello/:name", (req) => {

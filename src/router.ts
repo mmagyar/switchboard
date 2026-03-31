@@ -41,6 +41,12 @@ const trieInsert = (
       const name = optional ? segment.slice(1, -1) : segment.slice(1);
       if (!node.paramChild) {
         node.paramChild = { node: makeNode(), name, optional };
+      } else if (node.paramChild.optional !== optional) {
+        const existing = node.paramChild.optional ? "optional" : "mandatory";
+        const incoming = optional ? "optional" : "mandatory";
+        throw new Error(
+          `Conflicting param edges: cannot add ${incoming} param ":${name}" because an ${existing} param ":${node.paramChild.name}${node.paramChild.optional ? "?" : ""}" already exists at the same position. Route: ${normalized}`,
+        );
       }
       node = node.paramChild.node;
     } else {

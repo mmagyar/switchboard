@@ -328,3 +328,14 @@ describe("can parse with dot notation", () => {
     expect(result).toEqual({ filters: [{ field: "current_job", all_of: ["METAL work"] }] });
   });
 });
+
+test("union edge case: string value that looks like a number is coerced to number when union contains z.number()", () => {
+  // z.string().or(z.number()) — input "123" is a valid string, but parseNumberFromForm
+  // also matches the z.number() branch and converts it, which is the documented edge case.
+  const schema = z.object({
+    value: z.string().or(z.number()),
+  });
+  const result = parseNumberFromForm(schema, { value: "123" });
+  // The number branch wins: "123" → 123
+  expect(result).toEqual({ value: 123 });
+});

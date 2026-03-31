@@ -97,6 +97,20 @@ export const serveHotBuns = async (
     });
   }
 
+  // Set up log watcher once — broadcasts to all connected WebSocket clients
+  if (readLogs && watchLogs) {
+    watchLogs(async () => {
+      const logs = await readLogs();
+      wsc.forEach((ws) => {
+        try {
+          ws.send(logs);
+        } catch {
+          // ignore send errors for individual clients (they will be removed on close)
+        }
+      });
+    });
+  }
+
   const server = Bun.serve({
     port: confIn.port ?? (ssl ? 443 : 80),
     hostname: confIn.hostname || "0.0.0.0",
@@ -127,12 +141,7 @@ export const serveHotBuns = async (
         if (readLogs) ws.send(await readLogs());
       }, // a message is received
       open(ws) {
-        if (readLogs && watchLogs) {
-          wsc.push(ws);
-          watchLogs(async () => {
-            ws.send(await readLogs());
-          });
-        }
+        wsc.push(ws);
       }, // a socket is opened
       close(ws, _code, _message) {
         //remove ws from wsc

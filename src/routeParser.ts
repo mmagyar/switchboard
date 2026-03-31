@@ -7,8 +7,8 @@ import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly
 type ZodUnwrap<T> = T extends ZodReadonly<infer K> ? ZodUnwrap<K> : T extends ZodOptional<infer K> ? ZodUnwrap<K> : T;
 
 export const zodUnwrap = <T>(schema: T): ZodUnwrap<T> => {
-  if (schema instanceof ZodReadonly) return zodUnwrap(schema.unwrap()) as any; // recursive generic, cast is safe
-  if (schema instanceof ZodOptional) return zodUnwrap(schema.unwrap()) as any; // recursive generic, cast is safe
+  if (schema instanceof ZodReadonly) return zodUnwrap(schema.unwrap()) as unknown as ZodUnwrap<T>; // recursive generic, cast is safe
+  if (schema instanceof ZodOptional) return zodUnwrap(schema.unwrap()) as unknown as ZodUnwrap<T>; // recursive generic, cast is safe
   return schema as ZodUnwrap<T>;
 };
 
@@ -68,15 +68,18 @@ const unionHandler = <RETURN>(
   return schema.options
     .map((x) => parser(x as z.ZodType, input))
     .filter((x) => x !== undefined)
-    .reduce((p: any, c: RETURN) => {
-      if (c) {
-        if (typeof c === "object" && p && typeof p === "object") {
-          return merge(p, c, "nonEmpty", "nonEmpty");
+    .reduce(
+      (p: RETURN | undefined, c: RETURN) => {
+        if (c) {
+          if (typeof c === "object" && p && typeof p === "object") {
+            return merge(p as object, c as object, "nonEmpty", "nonEmpty") as unknown as RETURN;
+          }
+          return c;
         }
-        return c;
-      }
-      return p;
-    }, undefined);
+        return p;
+      },
+      undefined as RETURN | undefined,
+    ) as unknown as RETURN;
 };
 
 const arrayHandler = <RETURN>(
@@ -103,7 +106,7 @@ const objectHandler = <RETURN>(
 
   for (const key of Object.keys(shape)) {
     if (!(shape[key] instanceof z.ZodObject) && input && typeof input === "object") {
-      const output = parser(shape[key], (input as Record<string, any>)[key]);
+      const output = parser(shape[key], (input as Record<string, unknown>)[key]);
       if (typeof output !== "undefined") {
         if (!convertedValues) convertedValues = {};
         convertedValues[key] = output;

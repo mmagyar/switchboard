@@ -89,12 +89,16 @@ const encodeKeyValue = (key: string | number | symbol, value: unknown, search: U
 
 const objectStringify = (
   parentKeys: string | number | symbol,
-  obj: Record<string | number | symbol, any>,
+  obj: Record<string | number | symbol, unknown>,
   urlSearch: URLSearchParams,
 ) =>
   forEach(obj, (v, k) => {
     if (typeof v === "object" && v !== null) {
-      return objectStringify(`${encodeWithSingleQuote(parentKeys)}.${encodeWithSingleQuote(k)}`, v, urlSearch);
+      return objectStringify(
+        `${encodeWithSingleQuote(parentKeys)}.${encodeWithSingleQuote(k)}`,
+        v as Record<string | number | symbol, unknown>,
+        urlSearch,
+      );
     }
     return encodeKeyValue(`${String(parentKeys)}.${String(k)}`, v, urlSearch);
   });
@@ -117,7 +121,7 @@ export const defToUrl = <PATH extends string, PARAMS extends ZodType>(
       return;
     }
     if (typeof value === "object" && value !== null) {
-      return objectStringify(key, value, search);
+      return objectStringify(key, value as Record<string | number | symbol, unknown>, search);
     }
     return encodeKeyValue(key, value, search);
   });
@@ -128,7 +132,7 @@ export const defToUrl = <PATH extends string, PARAMS extends ZodType>(
   //TODO maybe add a wildcard character?
   let hadUndefined = false;
   for (const c of routeParams) {
-    const replacement = hadUndefined ? undefined : (pathParams as any)[c]; //TODO validate
+    const replacement = hadUndefined ? undefined : (pathParams as Record<string, unknown>)[c]; //TODO validate
 
     if (replacement === undefined) hadUndefined = true;
     const isOptional = optionalParams.includes(c);

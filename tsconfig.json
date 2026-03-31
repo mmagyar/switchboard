@@ -1,7 +1,5 @@
 {
   "include": ["./src/**/*"],
-  "rootDir": "./src",
-  "outdir": "./dist",
 
   "compilerOptions": {
     // Enable latest features
@@ -50,6 +48,8 @@
     //This is just too much overhead for very little gain
     "exactOptionalPropertyTypes": false,
 
+    "rootDir": "./src",
+    "outDir": "./dist",
     "baseUrl": ".",
     "paths": {},
   },

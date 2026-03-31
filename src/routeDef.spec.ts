@@ -113,10 +113,10 @@ test("generate the correct zod schema types based on optional/ non optional prop
   expect(third.shape.and).toBeInstanceOf(ZodString);
   expect(third.shape.and.isOptional()).toBe(false);
   expect(third.shape.me).toBeInstanceOf(ZodOptional);
-  expect(third.shape.me._def.innerType).toBeInstanceOf(ZodString);
+  expect(third.shape.me.def.innerType).toBeInstanceOf(ZodString);
   expect(third.shape.me.isOptional()).toBe(true);
   expect(third.shape.them).toBeInstanceOf(ZodOptional);
-  expect(third.shape.them._def.innerType).toBeInstanceOf(ZodString);
+  expect(third.shape.them.def.innerType).toBeInstanceOf(ZodString);
   expect(third.shape.them.isOptional()).toBe(true);
 });
 
@@ -133,10 +133,10 @@ test("if a part ends with _id it will be parsed as number", () => {
   expect(withOptional.shape.and_id).toBeInstanceOf(ZodNumber);
   expect(withOptional.shape.and_id.isOptional()).toBe(false);
   expect(withOptional.shape.me_id).toBeInstanceOf(ZodOptional);
-  expect(withOptional.shape.me_id._def.innerType).toBeInstanceOf(ZodNumber);
+  expect(withOptional.shape.me_id.def.innerType).toBeInstanceOf(ZodNumber);
   expect(withOptional.shape.me_id.isOptional()).toBe(true);
   expect(withOptional.shape.them).toBeInstanceOf(ZodOptional);
-  expect(withOptional.shape.them._def.innerType).toBeInstanceOf(ZodString);
+  expect(withOptional.shape.them.def.innerType).toBeInstanceOf(ZodString);
   expect(withOptional.shape.them.isOptional()).toBe(true);
 
   const withCamelCase = urlToZodSchema("/hello/:you/:andId/:meId?/:them?");
@@ -145,7 +145,7 @@ test("if a part ends with _id it will be parsed as number", () => {
   expect(withCamelCase.shape.andId).toBeInstanceOf(ZodNumber);
   expect(withCamelCase.shape.andId.isOptional()).toBe(false);
   expect(withCamelCase.shape.meId).toBeInstanceOf(ZodOptional);
-  expect(withCamelCase.shape.meId._def.innerType).toBeInstanceOf(ZodNumber);
+  expect(withCamelCase.shape.meId.def.innerType).toBeInstanceOf(ZodNumber);
   expect(withCamelCase.shape.meId.isOptional()).toBe(true);
   expect(withCamelCase.shape.them).toBeInstanceOf(ZodOptional);
 });

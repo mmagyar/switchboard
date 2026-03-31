@@ -1,5 +1,5 @@
 import type { ZodType, z } from "zod";
-import type { HTTPMethods } from "./staticDefs.ts";
+import type { HTTPMethods, HTTPMethodsWithBody } from "./staticDefs.ts";
 import { type Route } from "./routeDef.ts";
 import { defToUrl } from "./urlUtils.ts";
 
@@ -37,7 +37,7 @@ export const createClient =
   >(
     route: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
     params: z.infer<PARAMS>,
-    body?: z.infer<BODY>,
+    body?: METHOD extends HTTPMethodsWithBody ? z.infer<BODY> : undefined,
     settings: CallSettings = {},
   ): Promise<z.infer<OUT>> => {
     const fullPath = defToUrl(route, params);

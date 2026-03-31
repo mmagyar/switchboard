@@ -191,4 +191,42 @@ describe("createClient", () => {
     const result = await call(route, {}, undefined, { validateReturn: false });
     expect(result as unknown).toEqual({ wrong: "shape" });
   });
+
+  // -- Credentials ----------------------------------------------------------
+
+  test("does not send credentials by default", async () => {
+    mockOkFetch({ value: 1 });
+    const call = createClient("http://example.com");
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    await call(route, {});
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(init.credentials).toBeUndefined();
+  });
+
+  test("global withCredentials option sends credentials on every call", async () => {
+    mockOkFetch({ value: 1 });
+    const call = createClient("http://example.com", { withCredentials: true });
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    await call(route, {});
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(init.credentials).toBe("include");
+  });
+
+  test("per-call withCredentials overrides global withCredentials: false", async () => {
+    mockOkFetch({ value: 1 });
+    const call = createClient("http://example.com", { withCredentials: false });
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    await call(route, {}, undefined, { withCredentials: true });
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(init.credentials).toBe("include");
+  });
+
+  test("per-call withCredentials: false overrides global withCredentials: true", async () => {
+    mockOkFetch({ value: 1 });
+    const call = createClient("http://example.com", { withCredentials: true });
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    await call(route, {}, undefined, { withCredentials: false });
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(init.credentials).toBeUndefined();
+  });
 });

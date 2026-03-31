@@ -15,6 +15,7 @@ export class ApiError extends Error {
 
 export type ClientOptions = {
   onUnauthorized?: () => void;
+  withCredentials?: boolean;
 };
 
 export type CallSettings = {
@@ -55,7 +56,7 @@ export const createClient =
         Accept: "application/json",
       },
       body: body ? JSON.stringify(body) : undefined,
-      credentials: settings.withCredentials ? "include" : undefined,
+      credentials: (settings.withCredentials ?? options.withCredentials) ? "include" : undefined,
     }).then(async (response) => {
       if (response.status >= 400) {
         if (response.status === 401) {

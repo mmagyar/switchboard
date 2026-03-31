@@ -2,8 +2,6 @@ import { extractParams } from "./urlUtils.ts";
 import { merge } from "./util.ts";
 import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly, ZodType, ZodUnion } from "zod";
 
-// TODO clean up the types in this file, remove the casts
-
 type ZodUnwrap<T> = T extends ZodReadonly<infer K> ? ZodUnwrap<K> : T extends ZodOptional<infer K> ? ZodUnwrap<K> : T;
 
 export const zodUnwrap = <T>(schema: T): ZodUnwrap<T> => {
@@ -15,9 +13,9 @@ export const zodUnwrap = <T>(schema: T): ZodUnwrap<T> => {
 const callForSubObjects = <Schema extends z.ZodType>(
   schemaIn: Schema,
   input: unknown,
-  callback: (schema: z.ZodType, obj: object) => Record<string, any> | undefined | unknown,
+  callback: (schema: z.ZodType, obj: object) => unknown,
 ): Record<string, unknown> | undefined => {
-  let out: Record<string, any> | undefined;
+  let out: Record<string, unknown> | undefined;
   if (schemaIn instanceof ZodUnion) {
     return unionHandler(schemaIn, input, (t, i) => callForSubObjects(t, i, callback));
   }
@@ -34,14 +32,14 @@ const callForSubObjects = <Schema extends z.ZodType>(
       const res = callback(part, incoming);
       if (!res) continue;
       if (!out) out = {};
-      out[key] = typeof out[key] === "object" && res ? merge(out[key], res) : res;
+      out[key] = typeof out[key] === "object" && res ? merge(out[key] as object, res as object) : res;
     }
 
     if (part instanceof ZodUnion && incoming) {
       const res = callback(part, incoming);
       if (!res) continue;
       if (!out) out = {};
-      out[key] = typeof out[key] === "object" && res ? merge(out[key], res) : res;
+      out[key] = typeof out[key] === "object" && res ? merge(out[key] as object, res as object) : res;
     }
 
     if (part instanceof ZodArray && incoming && Array.isArray(incoming)) {
@@ -138,7 +136,7 @@ const parseNumber = (value: string) => {
 export const parseNumberFromForm = (
   schemaIn: z.ZodType,
   input: unknown,
-): Record<string, any> | number[] | number | undefined => {
+): Record<string, unknown> | number[] | number | undefined => {
   if (typeof input === "undefined") return undefined;
   const schema = zodUnwrap(schemaIn);
 
@@ -152,7 +150,7 @@ export const parseNumberFromForm = (
   }
 
   if (schema instanceof ZodArray) {
-    return arrayHandler(schema, input, parseNumberFromForm);
+    return arrayHandler(schema, input, parseNumberFromForm) as number[] | undefined;
   }
 
   if (schema instanceof ZodObject) {
@@ -162,7 +160,7 @@ export const parseNumberFromForm = (
   return undefined;
 };
 
-const parseBoolean = (value: string | undefined | unknown): boolean | undefined => {
+const parseBoolean = (value: unknown): boolean | undefined => {
   if (value === "true") return true;
   if (value === "false") return false;
   return undefined;
@@ -178,7 +176,7 @@ const parseBoolean = (value: string | undefined | unknown): boolean | undefined 
 export const parseBooleanFromForm = (
   schemaIn: z.ZodType,
   input: unknown,
-): Record<string, any> | boolean[] | boolean | undefined => {
+): Record<string, unknown> | boolean[] | boolean | undefined => {
   if (typeof input === "undefined") return undefined;
   const schema = zodUnwrap(schemaIn);
 
@@ -194,7 +192,7 @@ export const parseBooleanFromForm = (
   }
 
   if (schema instanceof ZodArray) {
-    return arrayHandler(schema, input, parseBooleanFromForm);
+    return arrayHandler(schema, input, parseBooleanFromForm) as boolean[] | undefined;
   }
 
   if (schema instanceof ZodObject) {
@@ -273,22 +271,18 @@ export const parseUrl = <PATH extends string, PARAMS extends z.ZodType>(
   //Parse back objects
   const parsedObjectDepth = merge(fromUrl, parseObjectFromForm(fromUrl));
   //Make sure numbers are actually treated as numbers, boolean, so we can use proper zod schema
-  let parsedNumbersOnly = parseNumberFromForm(paramsValidation, parsedObjectDepth);
-  if (typeof parsedNumbersOnly !== "object") {
-    // It should not really happen unless the value is undefined
-    // Here to please the typescript complier
-    parsedNumbersOnly = undefined;
-  }
+  const parsedNumbersOnly = parseNumberFromForm(paramsValidation, parsedObjectDepth);
+  const parsedNumbers = merge(
+    parsedObjectDepth,
+    typeof parsedNumbersOnly === "object" ? parsedNumbersOnly : undefined,
+    "nonEmpty",
+  );
 
-  const parsedNumbers = merge(parsedObjectDepth, parsedNumbersOnly, "nonEmpty");
-
-  let parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);
-  if (typeof parsedBooleans !== "object") {
-    // It should not really happen unless the value is undefined
-    // Here to please the typescript complier
-    parsedBooleans = undefined;
-  }
-
-  const parsedBooleansAndNumbers = merge(parsedNumbers, parsedBooleans, "nonEmpty");
+  const parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);
+  const parsedBooleansAndNumbers = merge(
+    parsedNumbers,
+    typeof parsedBooleans === "object" ? parsedBooleans : undefined,
+    "nonEmpty",
+  );
   return paramsValidation.safeParse(parsedBooleansAndNumbers);
 };

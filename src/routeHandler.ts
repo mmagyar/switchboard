@@ -225,8 +225,14 @@ export const wrapHandler = <
           });
           // Form data does not have data types, everything is a string,
           // so we convert data that could be a number to a number type before passing it to zod parse
-          forEach(parseNumberFromForm(def.bodyValidation, data) || {}, (value, key) => (data[key] = value));
-          forEach(parseBooleanFromForm(def.bodyValidation, data) || {}, (value, key) => (data[key] = value));
+          const numConversions = parseNumberFromForm(def.bodyValidation, data);
+          if (numConversions !== null && typeof numConversions === "object" && !Array.isArray(numConversions)) {
+            forEach(numConversions, (value, key) => (data[key] = value));
+          }
+          const boolConversions = parseBooleanFromForm(def.bodyValidation, data);
+          if (boolConversions !== null && typeof boolConversions === "object" && !Array.isArray(boolConversions)) {
+            forEach(boolConversions, (value, key) => (data[key] = value));
+          }
         } else if (contentType === null || contentType.includes("json")) {
           try {
             data = (await req.json()) as Record<string, unknown>;

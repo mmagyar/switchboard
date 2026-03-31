@@ -25,7 +25,7 @@ bun add https://github.com/mmagyar/switchboard
 
 ```typescript
 import { define, RouteHandlerDefiner, Router, serveHotBuns } from "switchboard/server";
-import z from "zod";
+import { z } from "zod";
 
 export type PermissionsType = "public" | "private";
 export type User = { name: string };

@@ -47,7 +47,7 @@ test("don't match early a not fully conforming route", async () => {
   const genTester = async (path: string, expected: string) => {
     const route = r.getRoute("get", new URL(path, url));
     expect(route).toBeDefined();
-    const res = await route?.handler({} as any);
+    const res = await route?.handler(new Request("https://example.com"));
     expect(await res?.text()).toBe(expected);
   };
 
@@ -67,7 +67,7 @@ test("Handle routes not starting with a slash", async () => {
   const genTester = async (path: string, expected: string) => {
     const route = r.getRoute("get", new URL(path, url));
     expect(route).toBeDefined();
-    const res = await route?.handler({} as any);
+    const res = await route?.handler(new Request("https://example.com"));
     expect(await res?.text()).toBe(expected);
   };
 
@@ -134,11 +134,11 @@ test("trie: static segments take priority over param segments", async () => {
   r.addRoute("get", "/users/:id", () => new Response("USER"));
 
   const meRoute = r.getRoute("get", new URL("/users/me", url));
-  expect(await meRoute?.handler({} as Request)).toEqual(new Response("ME"));
-  expect(await (await meRoute?.handler({} as Request))?.text()).toBe("ME");
+  expect(await meRoute?.handler(new Request("https://example.com"))).toEqual(new Response("ME"));
+  expect(await (await meRoute?.handler(new Request("https://example.com")))?.text()).toBe("ME");
 
   const idRoute = r.getRoute("get", new URL("/users/42", url));
-  expect(await (await idRoute?.handler({} as Request))?.text()).toBe("USER");
+  expect(await (await idRoute?.handler(new Request("https://example.com")))?.text()).toBe("USER");
 });
 
 test("trie: deeply nested static + param routes resolve correctly", async () => {
@@ -147,10 +147,10 @@ test("trie: deeply nested static + param routes resolve correctly", async () => 
   r.addRoute("get", "/a/:x/c", () => new Response("PARAM"));
 
   const staticRoute = r.getRoute("get", new URL("/a/b/c", url));
-  expect(await (await staticRoute?.handler({} as Request))?.text()).toBe("STATIC");
+  expect(await (await staticRoute?.handler(new Request("https://example.com")))?.text()).toBe("STATIC");
 
   const paramRoute = r.getRoute("get", new URL("/a/other/c", url));
-  expect(await (await paramRoute?.handler({} as Request))?.text()).toBe("PARAM");
+  expect(await (await paramRoute?.handler(new Request("https://example.com")))?.text()).toBe("PARAM");
 });
 
 test("trie: multiple optional trailing params", async () => {
@@ -168,9 +168,15 @@ test("trie: different methods on same path are independent", async () => {
   r.addRoute("post", "/resource", () => new Response("POST"));
   r.addRoute("delete", "/resource", () => new Response("DELETE"));
 
-  expect(await (await r.getRoute("get", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("GET");
-  expect(await (await r.getRoute("post", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("POST");
-  expect(await (await r.getRoute("delete", new URL("/resource", url))?.handler({} as Request))?.text()).toBe("DELETE");
+  expect(
+    await (await r.getRoute("get", new URL("/resource", url))?.handler(new Request("https://example.com")))?.text(),
+  ).toBe("GET");
+  expect(
+    await (await r.getRoute("post", new URL("/resource", url))?.handler(new Request("https://example.com")))?.text(),
+  ).toBe("POST");
+  expect(
+    await (await r.getRoute("delete", new URL("/resource", url))?.handler(new Request("https://example.com")))?.text(),
+  ).toBe("DELETE");
 });
 
 test("HEAD falls back to GET handler, preserving status and headers with no body", async () => {

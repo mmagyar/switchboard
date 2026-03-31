@@ -1,124 +1,159 @@
 # Project Rules & Preferences
 
+## Agent Behavior & Output Rules
+
+- **Code over conversation:** Do not apologize, do not write transitional filler phrases (e.g., "Here is the updated code..."). Output only the necessary explanations and the code blocks.
+- **Thinking:** You may use thinking tokens to plan complex architecture or debug, but keep the final output strictly focused on the solution.
+- **Precision:** When modifying files, only output the specific code blocks that need changing with enough surrounding context to find the insertion point. Do not rewrite entire files unless requested.
+- **Parallelism:** Always split work across as many agents in parallel as possible. If a task touches multiple files that don't depend on each other, spawn one agent per file/concern and run them concurrently. Only work sequentially when there is an explicit data dependency between steps.
+
 ## Working Directory
 
-Always work inside `slx/bun/`. That is the active application. Ignore `slx/remix/` — it is a legacy project.
+The repo root is `switchboard/`. All source lives in `src/`. There is no sub-application directory — work directly in the repo root.
 
-## Parallelism
+## Commands (How to verify your work)
 
-Always split work across as many agents in parallel as possible. If a task touches multiple files that don't depend on each other, spawn one agent per file/concern and run them concurrently. Only work sequentially when there is an explicit data dependency between steps.
+```sh
+bun run check   # type-check with tsc --noEmit (zero errors required)
+bun test        # run all *.spec.ts tests
+```
 
-## Code Style
+Run both before considering any change complete. Fix type errors before running tests.
+
+## Code Style & Conventions
 
 - **Simplest solution wins.** Before writing code, ask: what is the minimum amount of code that correctly solves this? Prefer deleting code over adding it.
-- **No `any`.** Never use `any` in TypeScript. If you don't know the type yet, use `unknown` and narrow it.
-- **No type casting to lie to the compiler.** Do not use `as SomeType` to silence a type error. The only accepted exception is branding a validated primitive (e.g. `s as UUID` after `z.string().uuid()` has confirmed the format), where the cast carries zero runtime risk and encodes a real semantic guarantee.
+- **Exports:** Use named exports exclusively (`export const foo = ...`). Avoid default exports — they break refactoring and make imports ambiguous.
+- **No `any`.** Never use `any` in TypeScript. If the type is genuinely dynamic, use `unknown` and narrow it.
+- **No type casting to lie to the compiler.** Do not use `as SomeType` to silence a type error. The only accepted exception is branding a validated primitive (e.g. after a Zod `.safeParse()` confirms the format), where the cast carries zero runtime risk and encodes a real semantic guarantee.
 - **Full type safety throughout.** All function signatures, return types, and data structures must be explicitly and correctly typed.
+- **No `exactOptionalPropertyTypes`** — it is explicitly `false` in `tsconfig.json`. Do not write code that depends on it being enabled.
+- **Strict null checks are on.** Do not assume values are non-null without proof.
 
 ## External Data & Validation
 
-All data that crosses a trust boundary must be validated with Zod at the boundary. This includes:
-
-- HTTP request params, query strings, and bodies (handled by switchboard, but the schemas you pass must be real)
-- Database query results
-- Third-party API responses
-- Anything parsed from `JSON.parse`
+All data that crosses a trust boundary must be validated with Zod at the boundary. This includes request params, query strings, bodies, and anything from `JSON.parse`.
 
 **Never use `z.custom<T>()`** — it performs zero runtime validation and is indistinguishable from `z.unknown()`. Write the actual `z.object({...})` schema for every field.
 
 **Never use `z.any()`** — use `z.unknown()` if the shape is genuinely opaque.
 
-### Zod patterns in this codebase
-
-- `z.string().uuid().transform(s => s as UUID)` — validates UUID format, preserves the branded type
-- `z.string().min(1).transform(s => s as UUID62)` — UUID62 is base-62; no format validator exists, so non-empty string is the correct check
-- `z.date()` — postgres rows return real `Date` objects; use this for timestamp/date columns
-- `z.string().nullable()` — for `string | null` DB columns
-- `z.union([schema, z.undefined()])` — for a required key whose value may be `undefined` (distinct from `.optional()` which makes the key itself absent, relevant because `exactOptionalPropertyTypes` is enabled in tsconfig)
-- Output schema mismatches emit a console warning (not an error) so the app keeps running, but schemas should still be correct
+Output schema mismatches emit a console warning (not an error) via `outputErrorWarning` so the app keeps running, but schemas should still be accurate.
 
 ## Architecture
 
 ### Stack
 
 - Runtime: **Bun**
-- Rendering: **React** (`renderToString` / `renderToStaticMarkup`) — SSR only, no client-side React
-- Router: **switchboard** (bespoke library, see below)
-- Database: **postgres** tagged-template client (`db\`SELECT ...\``)
+- Language: **TypeScript** (strict mode — see `tsconfig.json`)
 - Validation: **Zod**
-- Client JS: small hand-written TypeScript bundles built on demand with `Bun.build()`, served at `/scripts/*.js`
+- Tests: **Bun's built-in test runner** (`bun test`, files named `*.spec.ts`)
 
-### Switchboard
+This is a **library**, not an application. It has no database, no rendering framework, no client-side JS. Those are concerns of the consumer application.
 
-Switchboard is the routing and handler library. The route definition is the **single source of truth** for the method and path — never repeat them at registration time.
+### Core Concepts
+
+#### Route Definition — `define<PERMISSION>()`
+
+`define` is a generic factory. Call it once with your permission type, then use the returned builder to define typed routes:
 
 ```ts
-// 1. Define the route: method, path, permission, output schema, optional params schema
-export const myRoute = rhd(
-  def.get("/my-path", "public", outputSchema, paramsSchema),
-  async (params, user): Promise<OutputType> => {
-    // business logic — return data matching outputSchema
-    return { ... };
-  },
-  formatOutput, // e.g. renderHtml(MyView, meta) or renderOrRedirect(MyView)
-);
+const def = define<"public" | "user" | "admin">();
 
-// 2. Collect all routes and register — method and path come from the route itself
-const routes = [myRoute, otherRoute, ...];
-routes.forEach(r => router.addRoute(r.method, r.path, r.handlerWrapped));
+const myRoute = def.get(
+  "/items/:id",        // path — mandatory params ending in "Id" become z.number(), others z.string()
+  "user",              // permission
+  outputSchema,        // Zod schema — inferred return type of the handler
+  paramsSchema,        // optional override; if omitted, auto-derived from path
+);
 ```
 
-**Do not** pass the method string and path string again to `router.addRoute` — the route object already carries them. Duplicating them is a violation of single source of truth and will silently diverge.
+Methods available: `.get()`, `.del()`, `.options()`, `.post()`, `.put()`, `.patch()`
 
-**Every page route is simultaneously an HTML endpoint and a JSON API.** The `renderHtml` and `renderOrRedirect` helpers check the `Accept` header automatically:
-- `Accept: text/html` (browser) → React renders to a full HTML document
-- `Accept: application/json` (fetch/API client) → raw handler data returned as JSON, React skipped
+Body methods (`.post()`, `.put()`, `.patch()`) take `bodyValidation` as the third argument, before `outputValidation`.
 
-You never need a separate API endpoint for data that a page already returns. Fetch the page route with `Accept: application/json`.
+Path params are validated at definition time — every `:param` in the path must appear as a key in the params schema (if one is provided), or an error is thrown immediately.
 
-Permission levels: `"public"` | `"user"` | `"admin"`.
+#### Handler Wrapping — `RouteHandlerDefiner`
 
-### Format output helpers (`src/renderer.tsx`)
+`RouteHandlerDefiner` is instantiated once with your auth logic and returns the `define`-style handler function:
 
-| Helper | Use case |
-|---|---|
-| `renderHtml(View, meta)` | Route always renders HTML; never redirects |
-| `renderOrRedirect(View)` | Route may return `{ _type: "redirect", _url: "..." }` or props |
-| `redirectTo(fn)` | Route always redirects; URL computed from handler output |
+```ts
+const rhd = RouteHandlerDefiner(
+  async (user, permissionsNeeded, req) => { /* return "ok" | "forbidden" | "unauthenticated" */ },
+  async (req) => { /* return USER from request */ },
+  { outputErrorWarning, errorParser, errorHtmlFormatter, errorLogger }, // optional
+);
 
-The output schema's inferred TypeScript type flows into the format function's `data` parameter. Keep schemas accurate so this stays type-safe.
+export const myRoute = rhd(
+  def.get("/items/:id", "user", outputSchema),
+  async (params, user) => {
+    // params is fully typed from the schema
+    return { ... };
+  },
+  formatOutput, // optional: (data, user, req, params) => FormatOutputReturn
+);
+```
 
-`PageOutput<T>` is the return type for handlers that may redirect: `T | RedirectOutput`.
+For body routes, the handler receives `(params, body, user)`.
 
-Use `redirectOutput(url)` to construct the redirect branch and `redirectOutputSchema` in the union schema.
+If `formatOutput` is omitted, the handler output is JSON-serialised and returned automatically.
 
-### Locale
+#### Router
 
-- Supported locales: `"en"` and `"hu"` (typed as the branded `Lang`)
-- Locale is derived **from the URL path** via the `X-Url-Locale` header set by the locale-stripping middleware — not from cookies
-- Non-English paths have a `/<lang>/` prefix (e.g. `/hu/plans`)
-- Use `addLocaleToPath(path, locale)` when building internal links
-- OAuth state carries the locale across the Spotify redirect round-trip (`loginUrl(locale)`)
+```ts
+const router = new Router(defaultHandler); // defaultHandler is optional (404 fallback)
 
-### Client-side JS
+// Register — method and path come from the route object; do not duplicate them
+routes.forEach(r => router.addRoute(r.method, r.path, r.handlerWrapped));
 
-- Each page that needs JS renders its own `<script defer src="/scripts/foo.js" />` tag directly in its view component
-- Scripts are built from `src/client/*.ts` via `Bun.build()`
-- Prefer **progressive enhancement**: the page must work without JS; JS is an enhancement only
-- Prefer **HTML-over-the-wire** for dynamic updates: fetch the same SSR page, parse with `DOMParser`, swap the relevant DOM section. Avoid manual DOM building in JS.
-- Keep client scripts as short as possible — the SSR already knows how to render every state
+// Dispatch
+const response = await router.handleRequest(req);
+```
 
-### `exactOptionalPropertyTypes`
+`Router.addRoute` throws on duplicate `method + path` registrations. `HEAD` requests automatically fall back to the matching `GET` handler with a body-less response.
 
-`tsconfig.json` has `exactOptionalPropertyTypes: true`. This means:
-- `{ foo?: string }` — key may be absent
-- `{ foo: string | undefined }` — key must be present, value may be undefined
+#### URL Parameter Auto-Schema
 
-These are **not interchangeable**. Use `z.union([schema, z.undefined()])` (not `.optional()`) when the TypeScript type has `: T | undefined` (required key).
+When no `paramsValidation` is passed to `def.get()` (etc.), `urlToZodSchema` auto-generates one:
+- `:fooId` → `z.number()`
+- `:foo` → `z.string()`
+- `:fooId?` → `z.optional(z.number())`
+- `:foo?` → `z.optional(z.string())`
+
+Optional params must come after mandatory params in the path — this is enforced at route registration.
+
+#### Streaming SSR Support
+
+`FormatOutput` receives handler data **before all Promises are resolved**, enabling streaming. If a handler returns `{ title: Promise<string>, body: Promise<string> }`, `formatOutput` receives those Promises directly and can stream them. Zod validates each property in the background as it resolves.
+
+If `formatOutput` is not provided, all Promises are awaited and the full result is validated and JSON-serialised.
+
+#### `serveHotBuns`
+
+A convenience wrapper around `Bun.serve` with hot-reload support for development. Accepts the same options as `Bun.serve` plus a `router` instance.
+
+### Exports
+
+The library has two entry points defined in `package.json`:
+
+| Entry point | File | Contents |
+|---|---|---|
+| `switchboard/server` | `src/index.ts` | `define`, `RouteHandlerDefiner`, `Router`, `serveHotBuns`, error classes, types |
+| `switchboard/client` | `src/clientExport.ts` | Client-safe utilities (no server-only imports) |
+
+### Error Classes
+
+| Class | Status | Use case |
+|---|---|---|
+| `NotFoundError` | 404 | Resource does not exist |
+| `Unauthorized` | 401 or 403 | Auth failed (pass status in constructor) |
+| `RequestError` | any | General client error with explicit status |
+
+Throw any of these from a handler — `wrapHandler` catches them and returns the correct HTTP response.
 
 ## Single Source of Truth
 
-Avoid duplicating information. If something is already expressed in one place, read it from there rather than restating it:
-- Route method and path live in the `def.*` call — do not repeat them in `router.addRoute`
-- Locale comes from the URL — do not also store it in a cookie
-- SSR already knows how to render every page state — do not reimplement that logic in client JS
+- Route method and path live in the `def.*` call — do not repeat them in `router.addRoute`.
+- The output Zod schema is the single source for the handler's return type — do not write a separate TypeScript interface that duplicates it.
+- Tests live alongside source as `*.spec.ts` files — do not create a separate `tests/` directory.

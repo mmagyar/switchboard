@@ -155,7 +155,6 @@ test("trie: static segments take priority over param segments", async () => {
   r.addRoute("get", "/users/:id", () => new Response("USER"));
 
   const meRoute = r.getRoute("get", new URL("/users/me", url));
-  expect(await meRoute?.handler(new Request("https://example.com"))).toEqual(new Response("ME"));
   expect(await (await meRoute?.handler(new Request("https://example.com")))?.text()).toBe("ME");
 
   const idRoute = r.getRoute("get", new URL("/users/42", url));
@@ -246,4 +245,55 @@ test("unknown HTTP method returns 405 even when no routes are registered", async
   const r = new Router();
   const res = await r.handleRequest(new Request("https://example.com/anything", { method: "CONNECT" }));
   expect(res.status).toBe(405);
+});
+
+// ── conflicting param-name detection ─────────────────────────────────────────
+
+test("throws when a second route uses a different param name at the same trie position", () => {
+  const r = new Router();
+  r.addRoute("get", "/users/:id", () => new Response("by id"));
+  // ":name" is structurally identical to ":id" but has a different label —
+  // both routes would share the same paramChild node and the first handler
+  // would be silently overwritten without the guard.
+  expect(() => r.addRoute("get", "/users/:name", () => new Response("by name"))).toThrow(/conflicting param names/i);
+});
+
+test("throws on param-name conflict even when the methods differ", () => {
+  // The trie is shared across methods, so a POST with ":name" at the same
+  // position as a GET with ":id" must also be rejected.
+  const r = new Router();
+  r.addRoute("get", "/users/:id", () => new Response("GET by id"));
+  expect(() => r.addRoute("post", "/users/:name", () => new Response("POST by name"))).toThrow(
+    /conflicting param names/i,
+  );
+});
+
+test("throws on param-name conflict at a deeply nested position", () => {
+  const r = new Router();
+  r.addRoute("get", "/a/:x/b", () => new Response("x"));
+  expect(() => r.addRoute("get", "/a/:y/b", () => new Response("y"))).toThrow(/conflicting param names/i);
+});
+
+test("throws when param-name conflict also involves an optionality mismatch", () => {
+  // A different name *and* different optionality — the name check fires first
+  // and still produces a clear "conflicting param names" error.
+  const r = new Router();
+  r.addRoute("get", "/users/:id", () => new Response("mandatory id"));
+  expect(() => r.addRoute("get", "/users/:name?", () => new Response("optional name"))).toThrow(
+    /conflicting param names/i,
+  );
+});
+
+test("does not throw when the same param name is reused across different methods", () => {
+  // Identical structural routes under different HTTP methods are fine; they
+  // share the trie node but each method gets its own handler entry.
+  const r = new Router();
+  r.addRoute("get", "/users/:id", () => new Response("GET"));
+  expect(() => r.addRoute("post", "/users/:id", () => new Response("POST"))).not.toThrow();
+});
+
+test("does not throw when the same param name is reused at the same position in a longer path", () => {
+  const r = new Router();
+  r.addRoute("get", "/users/:id/posts", () => new Response("posts"));
+  expect(() => r.addRoute("get", "/users/:id/comments", () => new Response("comments"))).not.toThrow();
 });

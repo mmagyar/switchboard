@@ -41,6 +41,10 @@ const trieInsert = (
       const name = optional ? segment.slice(1, -1) : segment.slice(1);
       if (!node.paramChild) {
         node.paramChild = { node: makeNode(), name, optional };
+      } else if (node.paramChild.name !== name) {
+        throw new Error(
+          `Conflicting param names: cannot add ":${name}" because ":${node.paramChild.name}" already exists at the same trie position. Route: ${normalized}`,
+        );
       } else if (node.paramChild.optional !== optional) {
         const existing = node.paramChild.optional ? "optional" : "mandatory";
         const incoming = optional ? "optional" : "mandatory";

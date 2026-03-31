@@ -1,7 +1,5 @@
 {
   "include": ["./src/**/*"],
-  "rootDir": "./src",
-  "outdir": "./dist",
 
   "compilerOptions": {
     // Enable latest features
@@ -10,7 +8,6 @@
     "module": "NodeNext",
     "moduleDetection": "auto",
     "jsx": "react-jsx",
-    "allowJs": true,
     "esModuleInterop": true,
     "declaration": true,
     //My opts
@@ -30,7 +27,6 @@
     "alwaysStrict": true,
     "allowUnusedLabels": false,
     "allowUnreachableCode": false,
-    "allowSyntheticDefaultImports": false,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitAny": true,
@@ -51,9 +47,8 @@
     //This is just too much overhead for very little gain
     "exactOptionalPropertyTypes": false,
 
-    /* Preact Config */
-    "jsxImportSource": "preact",
-    "baseUrl": ".",
-    "paths": {}
-  }
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "paths": {},
+  },
 }

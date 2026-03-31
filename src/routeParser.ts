@@ -2,22 +2,20 @@ import { extractParams } from "./urlUtils.ts";
 import { merge } from "./util.ts";
 import { z, ZodArray, ZodBoolean, ZodNumber, ZodObject, ZodOptional, ZodReadonly, ZodType, ZodUnion } from "zod";
 
-// TODO clean up the types in this file, remove the casts
-
 type ZodUnwrap<T> = T extends ZodReadonly<infer K> ? ZodUnwrap<K> : T extends ZodOptional<infer K> ? ZodUnwrap<K> : T;
 
 export const zodUnwrap = <T>(schema: T): ZodUnwrap<T> => {
-  if (schema instanceof ZodReadonly) return zodUnwrap(schema.def.innerType) as any;
-  if (schema instanceof ZodOptional) return zodUnwrap(schema.def.innerType) as any;
+  if (schema instanceof ZodReadonly) return zodUnwrap(schema.unwrap()) as unknown as ZodUnwrap<T>; // recursive generic, cast is safe
+  if (schema instanceof ZodOptional) return zodUnwrap(schema.unwrap()) as unknown as ZodUnwrap<T>; // recursive generic, cast is safe
   return schema as ZodUnwrap<T>;
 };
 
 const callForSubObjects = <Schema extends z.ZodType>(
   schemaIn: Schema,
   input: unknown,
-  callback: (schema: z.ZodType, obj: object) => Record<string, any> | undefined | unknown,
+  callback: (schema: z.ZodType, obj: object) => unknown,
 ): Record<string, unknown> | undefined => {
-  let out: Record<string, any> | undefined;
+  let out: Record<string, unknown> | undefined;
   if (schemaIn instanceof ZodUnion) {
     return unionHandler(schemaIn, input, (t, i) => callForSubObjects(t, i, callback));
   }
@@ -34,14 +32,14 @@ const callForSubObjects = <Schema extends z.ZodType>(
       const res = callback(part, incoming);
       if (!res) continue;
       if (!out) out = {};
-      out[key] = typeof out[key] === "object" && res ? merge(out[key], res) : res;
+      out[key] = typeof out[key] === "object" && res ? merge(out[key] as object, res as object) : res;
     }
 
     if (part instanceof ZodUnion && incoming) {
       const res = callback(part, incoming);
       if (!res) continue;
       if (!out) out = {};
-      out[key] = typeof out[key] === "object" && res ? merge(out[key], res) : res;
+      out[key] = typeof out[key] === "object" && res ? merge(out[key] as object, res as object) : res;
     }
 
     if (part instanceof ZodArray && incoming && Array.isArray(incoming)) {
@@ -68,15 +66,18 @@ const unionHandler = <RETURN>(
   return schema.options
     .map((x) => parser(x as z.ZodType, input))
     .filter((x) => x !== undefined)
-    .reduce((p: any, c: RETURN) => {
-      if (c) {
-        if (typeof c === "object" && p && typeof p === "object") {
-          return merge(p, c, "nonEmpty", "nonEmpty");
+    .reduce(
+      (p: RETURN | undefined, c: RETURN) => {
+        if (c) {
+          if (typeof c === "object" && p && typeof p === "object") {
+            return merge(p as object, c as object, "nonEmpty", "nonEmpty") as unknown as RETURN;
+          }
+          return c;
         }
-        return c;
-      }
-      return p;
-    }, undefined);
+        return p;
+      },
+      undefined as RETURN | undefined,
+    ) as unknown as RETURN;
 };
 
 const arrayHandler = <RETURN>(
@@ -103,7 +104,7 @@ const objectHandler = <RETURN>(
 
   for (const key of Object.keys(shape)) {
     if (!(shape[key] instanceof z.ZodObject) && input && typeof input === "object") {
-      const output = parser(shape[key], (input as Record<string, any>)[key]);
+      const output = parser(shape[key], (input as Record<string, unknown>)[key]);
       if (typeof output !== "undefined") {
         if (!convertedValues) convertedValues = {};
         convertedValues[key] = output;
@@ -135,7 +136,7 @@ const parseNumber = (value: string) => {
 export const parseNumberFromForm = (
   schemaIn: z.ZodType,
   input: unknown,
-): Record<string, any> | number[] | number | undefined => {
+): Record<string, unknown> | number[] | number | undefined => {
   if (typeof input === "undefined") return undefined;
   const schema = zodUnwrap(schemaIn);
 
@@ -149,7 +150,7 @@ export const parseNumberFromForm = (
   }
 
   if (schema instanceof ZodArray) {
-    return arrayHandler(schema, input, parseNumberFromForm);
+    return arrayHandler(schema, input, parseNumberFromForm) as number[] | undefined;
   }
 
   if (schema instanceof ZodObject) {
@@ -159,7 +160,7 @@ export const parseNumberFromForm = (
   return undefined;
 };
 
-const parseBoolean = (value: string | undefined | unknown): boolean | undefined => {
+const parseBoolean = (value: unknown): boolean | undefined => {
   if (value === "true") return true;
   if (value === "false") return false;
   return undefined;
@@ -175,7 +176,8 @@ const parseBoolean = (value: string | undefined | unknown): boolean | undefined 
 export const parseBooleanFromForm = (
   schemaIn: z.ZodType,
   input: unknown,
-): Record<string, any> | boolean[] | boolean | undefined => {
+): Record<string, unknown> | boolean[] | boolean | undefined => {
+  if (typeof input === "undefined") return undefined;
   const schema = zodUnwrap(schemaIn);
 
   if (schema instanceof ZodUnion) {
@@ -190,7 +192,7 @@ export const parseBooleanFromForm = (
   }
 
   if (schema instanceof ZodArray) {
-    return arrayHandler(schema, input, parseBooleanFromForm);
+    return arrayHandler(schema, input, parseBooleanFromForm) as boolean[] | undefined;
   }
 
   if (schema instanceof ZodObject) {
@@ -212,16 +214,21 @@ export const parseObjectFromForm = (
 
 export const parseFieldName = (fieldName: string, fieldValue?: string | string[]): object => {
   const parts = fieldName.split(".");
-  const result: any = {};
-  let current = result;
+  const result: Record<string, unknown> = {};
+  let current: Record<string, unknown> = result;
   for (let i = 0; i < parts.length; i++) {
-    current[parts[i]!] = isNumeric(parts[i + 1]) ? [] : {};
+    const key = parts[i]!;
+    const nextKey = parts[i + 1];
 
-    if (!parts[i + 1]) {
-      current[parts[i]!] = fieldValue;
+    if (!nextKey) {
+      current[key] = fieldValue;
       return result;
     }
-    current = current[parts[i]!];
+
+    // Record<string, unknown> cursor works for numeric keys too.
+    const child = (isNumeric(nextKey) ? [] : {}) as Record<string, unknown>;
+    current[key] = child;
+    current = child;
   }
 
   return result;
@@ -264,24 +271,18 @@ export const parseUrl = <PATH extends string, PARAMS extends z.ZodType>(
   //Parse back objects
   const parsedObjectDepth = merge(fromUrl, parseObjectFromForm(fromUrl));
   //Make sure numbers are actually treated as numbers, boolean, so we can use proper zod schema
-  let parsedNumbersOnly = parseNumberFromForm(paramsValidation, parsedObjectDepth);
-  if (typeof parsedNumbersOnly !== "object") {
-    // It should not really happen unless the value is undefined
-    // Here to please the typescript complier
-    parsedNumbersOnly = undefined;
-  }
+  const parsedNumbersOnly = parseNumberFromForm(paramsValidation, parsedObjectDepth);
+  const parsedNumbers = merge(
+    parsedObjectDepth,
+    typeof parsedNumbersOnly === "object" ? parsedNumbersOnly : undefined,
+    "nonEmpty",
+  );
 
-  //TODO this nonEmpty does not work for undefined objects
-  // (??? What does this mean, i don't even know anymore)
-  const parsedNumbers = merge(parsedObjectDepth, parsedNumbersOnly, "nonEmpty");
-
-  let parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);
-  if (typeof parsedBooleans !== "object") {
-    // It should not really happen unless the value is undefined
-    // Here to please the typescript complier
-    parsedBooleans = undefined;
-  }
-
-  const parsedBooleansAndNumbers = merge(parsedNumbers, parsedBooleans, "nonEmpty");
+  const parsedBooleans = parseBooleanFromForm(paramsValidation, parsedNumbers);
+  const parsedBooleansAndNumbers = merge(
+    parsedNumbers,
+    typeof parsedBooleans === "object" ? parsedBooleans : undefined,
+    "nonEmpty",
+  );
   return paramsValidation.safeParse(parsedBooleansAndNumbers);
 };

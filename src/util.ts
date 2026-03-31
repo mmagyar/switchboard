@@ -61,7 +61,7 @@ export const keys = <T extends Record<Keys, any>, Keys extends keyof T = keyof T
 
 // export const entries = <T extends Record<Keys, any>, Keys extends keyof T = keyof T>(obj: T) =>
 //   Object.entries(obj) as [Keys, T[Keys]][];
-export const entriesWithUndefiend = <T extends object>(obj: T) => {
+export const entriesWithUndefined = <T extends object>(obj: T) => {
   return Object.entries(obj) as [keyof T, T[keyof T]][];
 };
 
@@ -70,10 +70,6 @@ export const entriesWithUndefiend = <T extends object>(obj: T) => {
  **/
 export const entries = <T extends object>(obj: T) => {
   return Object.entries(obj).filter(([, value]) => value !== undefined) as [keyof T, Exclude<T[keyof T], undefined>][];
-  // .map(([key, value]) => [key as keyof T, value as Exclude<T[keyof T], undefined>]) as [
-  // keyof T,
-  // Exclude<T[keyof T], undefined>,
-  // ][];
 };
 export function toObject<T, K extends number | string | symbol>(
   array: T[],
@@ -105,59 +101,54 @@ export const objectToArray = <T extends Record<any, any>, OUT, FILTER extends bo
   return result as FILTER extends true ? ExcludeUndefined<OUT>[] : OUT[];
 };
 
-export const deepFreeze = <T>(o: T | any): T => {
+export const deepFreeze = <T extends object>(o: T): T => {
   Object.entries(o).forEach(([key, value]) => {
-    o[key] = value && typeof value === "object" ? deepFreeze(value) : value;
+    (o as Record<string, unknown>)[key] = value && typeof value === "object" ? deepFreeze(value as object) : value;
   });
   return Object.freeze(o);
 };
 
 export const deepCopy = <T>(obj: T): T => {
-  let copy: any = null;
+  if (obj === null || obj === undefined || typeof obj !== "object") return obj;
 
-  // Handle the 3 simple types, and null or undefined
-  // eslint-disable-next-line eqeqeq
-  if (obj == null || typeof obj !== "object") return obj;
-
-  // Handle Date
   if (obj instanceof Date) {
-    copy = new Date();
+    const copy = new Date();
     copy.setTime(obj.getTime());
-    return copy;
+    return copy as unknown as T;
   }
 
   if (obj instanceof Array) {
-    copy = [];
-    for (let i = 0, len = obj.length; i < len; i += 1) {
-      copy[i] = deepCopy(obj[i]);
+    const arr = obj as unknown as unknown[];
+    const copy: unknown[] = [];
+    for (let i = 0, len = arr.length; i < len; i += 1) {
+      copy[i] = deepCopy(arr[i]);
     }
-
-    return copy;
+    return copy as unknown as T;
   }
 
-  if (obj instanceof RegExp) return obj;
+  if (obj instanceof RegExp) return obj as unknown as T;
 
   if (obj instanceof Object) {
-    copy = {};
-    for (const attr in obj) {
-      if (Object.prototype.hasOwnProperty.call(obj, attr)) {
-        copy[attr] = deepCopy(obj[attr]);
+    const rec = obj as unknown as Record<string, unknown>;
+    const copy: Record<string, unknown> = {};
+    for (const attr in rec) {
+      if (Object.prototype.hasOwnProperty.call(rec, attr)) {
+        copy[attr] = deepCopy(rec[attr]);
       }
     }
-
-    return copy;
+    return copy as unknown as T;
   }
 
   throw new Error("Unable to copy obj! Its type isn't supported.");
 };
 
 /** Is defined object, and not an array **/
-function isObject(item: any): item is object {
-  return item && typeof item === "object" && !Array.isArray(item);
+function isObject(item: unknown): item is object {
+  return !!item && typeof item === "object" && !Array.isArray(item);
 }
 
-function isObjectOrArray(item: any): item is object | any[] {
-  return item && (typeof item === "object" || Array.isArray(item));
+function isObjectOrArray(item: unknown): item is object | unknown[] {
+  return !!item && (typeof item === "object" || Array.isArray(item));
 }
 
 type DeepMerge<T, U> = T extends object
@@ -192,7 +183,7 @@ export function merge<T extends object, U extends object>(
 
   if (Array.isArray(base) && Array.isArray(override)) {
     if (arrayStrategy === "nonEmpty") {
-      return override.length > 0 ? ([...override] as any) : ([...base] as any);
+      return (override.length > 0 ? [...override] : [...base]) as unknown as DeepMerge<T, U>;
     }
     if (arrayStrategy === "merge") {
       const longest = Math.max(base.length, override.length);
@@ -204,17 +195,17 @@ export function merge<T extends object, U extends object>(
         }
         return overrideItem ?? baseItem;
       });
-      return merged as any;
+      return merged as unknown as DeepMerge<T, U>;
     }
     if (arrayStrategy === "concat") {
-      return [...base, ...override] as any;
+      return [...base, ...override] as unknown as DeepMerge<T, U>;
     }
     if (arrayStrategy === "override") {
-      return [...override] as any;
+      return [...override] as unknown as DeepMerge<T, U>;
     }
   }
 
-  const output: any = { ...base } as T & U;
+  const output: Record<string, unknown> = { ...(base as unknown as Record<string, unknown>) };
   if (isObject(base) && isObject(override)) {
     Object.keys(override).forEach((key) => {
       const overrideKey = key as keyof U;
@@ -224,26 +215,27 @@ export function merge<T extends object, U extends object>(
       const overrideHasKey = Object.hasOwn(override, overrideKey);
 
       if ((isObject(override[overrideKey]) || Array.isArray(override[overrideKey])) && baseHasKey) {
-        output[overrideKey] = merge(base[baseKey] as object, override[overrideKey] as object, strategy, arrayStrategy);
+        output[key] = merge(base[baseKey] as object, override[overrideKey] as object, strategy, arrayStrategy);
       } else {
         if (strategy === "nonEmpty") {
-          output[overrideKey] = override[overrideKey] === undefined ? base[baseKey] : override[overrideKey];
+          output[key] = override[overrideKey] === undefined ? base[baseKey] : override[overrideKey];
         }
         //Need to check if the object has the key, so we only override with undefined if it is actaully defined as undefined
         else if (strategy === "merge") {
-          output[overrideKey] = overrideHasKey ? override[overrideKey] : base[baseKey];
+          output[key] = overrideHasKey ? override[overrideKey] : base[baseKey];
         } else {
-          output[overrideKey] = baseHasKey ? base[baseKey] : override[overrideKey];
+          output[key] = baseHasKey ? base[baseKey] : override[overrideKey];
         }
       }
     });
   } else {
     throw new Error("NOT MERGING ANYTHING, this should not happen: " + JSON.stringify({ base, override }, null, 2));
   }
-  return output;
+  return output as unknown as DeepMerge<T, U>;
 }
 
-export const promiseTimeout = <T>(time: number): Promise<T> => new Promise<T>((resolve) => setTimeout(resolve, time));
+export const promiseTimeout = (time: number): Promise<void> =>
+  new Promise<void>((resolve) => setTimeout(resolve, time));
 
 export const promiseDelay =
   <T>(time: number): ((result: T) => Promise<T>) =>

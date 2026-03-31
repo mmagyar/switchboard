@@ -1,4 +1,5 @@
-import fs = require("fs");
+import * as fs from "fs";
+import * as readline from "readline";
 
 /**
  * Capture console logs and write them to app.log
@@ -21,12 +22,12 @@ export const initFileLogger = () => {
 
   const createLogger =
     (level: string) =>
-    (...args: any[]) => {
+    (...args: unknown[]) => {
       const date = Date.now();
       const content = JSON.stringify(args.length === 1 ? args[0] : [...args]);
 
       logFile.write(`[${date}][${level[0]?.toUpperCase()}] - ${content}\n`, (err) => {
-        if (err) throw err;
+        if (err) logStdout.write(`Failed to write to log file: ${err.message}\n`);
       });
       logStdout.write(`${date} - ${getColorCode(level)}${content}\x1b[0m\n`);
     };
@@ -37,14 +38,10 @@ export const initFileLogger = () => {
 };
 
 export const readLogfile = async (lines = 80) => {
-  const fs = require("fs");
-  const readline = require("readline");
-  const stream = require("stream");
 
   const readLastLines = async (filePath: string, numLines: number) => {
     const instream = fs.createReadStream(filePath);
-    const outstream = new stream();
-    const rl = readline.createInterface(instream, outstream);
+    const rl = readline.createInterface({ input: instream, crlfDelay: Infinity });
 
     const lines: string[] = [];
     for await (const line of rl) {

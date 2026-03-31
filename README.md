@@ -292,7 +292,9 @@ const result = await call(listRoute, { search: "burger" });
 
 | Field | Description |
 |---|---|
-| `onUnauthorized` | Callback invoked when the server returns `401` or `403`; use to redirect to login |
+| `onUnauthorized` | Callback invoked when the server returns `401`; use to redirect to login |
+| `onForbidden` | Callback invoked when the server returns `403`; use to show an access-denied message |
+| `withCredentials` | Send cookies on every call made by this client (can be overridden per-call via `CallSettings`) |
 
 #### `call(route, params, body?, settings?)`
 

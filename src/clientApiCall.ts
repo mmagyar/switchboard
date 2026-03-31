@@ -15,6 +15,7 @@ export class ApiError extends Error {
 
 export type ClientOptions = {
   onUnauthorized?: () => void;
+  onForbidden?: () => void;
   withCredentials?: boolean;
 };
 
@@ -61,6 +62,9 @@ export const createClient =
       if (response.status >= 400) {
         if (response.status === 401) {
           options.onUnauthorized?.();
+        }
+        if (response.status === 403) {
+          options.onForbidden?.();
         }
         const errDefault = `Unknown error, status: ${response.status}`;
         let errorText = errDefault;

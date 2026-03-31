@@ -111,7 +111,11 @@ const resolveAllProperties = async (obj: Record<string, unknown>): Promise<Recor
 const hasPromiseValues = (obj: unknown): obj is Record<string, unknown> =>
   obj !== null &&
   typeof obj === "object" &&
+  !Array.isArray(obj) &&
   Object.values(obj as Record<string, unknown>).some((v) => v instanceof Promise);
+
+const hasArrayPromiseElements = (obj: unknown): obj is unknown[] =>
+  Array.isArray(obj) && obj.some((v) => v instanceof Promise);
 
 /**
  * Wraps the handler with the necessary logic to handle the request.
@@ -266,6 +270,8 @@ export const wrapHandler = <
       // JSON path: resolve all promises, validate the whole object, then JSON.stringify
       if (hasPromiseValues(result)) {
         result = await resolveAllProperties(result);
+      } else if (hasArrayPromiseElements(result)) {
+        result = await Promise.all(result);
       }
       const output = outputValidation.safeParse(result);
       if (!output.success) {

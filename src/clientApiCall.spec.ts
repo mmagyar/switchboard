@@ -154,7 +154,7 @@ describe("createClient", () => {
     expect(called).toBe(true);
   });
 
-  test("does not call onUnauthorized for non-401 errors", async () => {
+  test("does not call onUnauthorized for 403 errors", async () => {
     mockErrorFetch(403);
     let called = false;
     const call = createClient("http://example.com", {
@@ -165,6 +165,57 @@ describe("createClient", () => {
     const route = def.get("/secure", "public", z.object({ value: z.number() }));
     await expect(call(route, {})).rejects.toBeInstanceOf(ApiError);
     expect(called).toBe(false);
+  });
+
+  test("calls onForbidden callback when status is 403", async () => {
+    mockErrorFetch(403, { message: "forbidden" });
+    let called = false;
+    const call = createClient("http://example.com", {
+      onForbidden: () => {
+        called = true;
+      },
+    });
+    const route = def.get("/admin", "public", z.object({ value: z.number() }));
+    await expect(call(route, {})).rejects.toBeInstanceOf(ApiError);
+    expect(called).toBe(true);
+  });
+
+  test("does not call onForbidden for 401 errors", async () => {
+    mockErrorFetch(401, { message: "unauthorized" });
+    let called = false;
+    const call = createClient("http://example.com", {
+      onForbidden: () => {
+        called = true;
+      },
+    });
+    const route = def.get("/admin", "public", z.object({ value: z.number() }));
+    await expect(call(route, {})).rejects.toBeInstanceOf(ApiError);
+    expect(called).toBe(false);
+  });
+
+  test("onUnauthorized and onForbidden fire independently on their respective statuses", async () => {
+    let unauthorizedCalled = false;
+    let forbiddenCalled = false;
+    const call = createClient("http://example.com", {
+      onUnauthorized: () => {
+        unauthorizedCalled = true;
+      },
+      onForbidden: () => {
+        forbiddenCalled = true;
+      },
+    });
+    const route = def.get("/secure", "public", z.object({ value: z.number() }));
+
+    mockErrorFetch(401);
+    await expect(call(route, {})).rejects.toBeInstanceOf(ApiError);
+    expect(unauthorizedCalled).toBe(true);
+    expect(forbiddenCalled).toBe(false);
+
+    unauthorizedCalled = false;
+    mockErrorFetch(403);
+    await expect(call(route, {})).rejects.toBeInstanceOf(ApiError);
+    expect(unauthorizedCalled).toBe(false);
+    expect(forbiddenCalled).toBe(true);
   });
 
   // -- Output validation ----------------------------------------------------

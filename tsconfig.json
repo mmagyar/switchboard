@@ -27,7 +27,6 @@
     "alwaysStrict": true,
     "allowUnusedLabels": false,
     "allowUnreachableCode": false,
-    "allowSyntheticDefaultImports": false,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noImplicitAny": true,
@@ -50,7 +49,6 @@
 
     "rootDir": "./src",
     "outDir": "./dist",
-    "baseUrl": ".",
     "paths": {},
   },
 }

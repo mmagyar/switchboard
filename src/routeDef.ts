@@ -1,5 +1,5 @@
-import type { ZodNumber, ZodOptional, ZodString, ZodType } from "zod";
-import { z, ZodObject } from "zod";
+import type { ZodNumber, ZodString, ZodType } from "zod";
+import { z, ZodArray, ZodEnum, ZodLiteral, ZodObject, ZodOptional, ZodReadonly, ZodUnion } from "zod";
 import type { HTTPMethods, HTTPMethodsWithBody, HTTPMethodsWithoutBody } from "./staticDefs.ts";
 import type { FilterByIdEnding, PathToMandatoryKeys, PathToOptionalKeys, ValidateOptionalUrl } from "./urlType.ts";
 import {
@@ -51,6 +51,65 @@ function assertAliasParamNamesMatch(canonicalPath: string, alias: string): void 
   }
 }
 
+/**
+ * Returns true if a schema branch is "string-origin" — i.e. it can receive a raw string
+ * from a URL and produce a meaningful result after the coercion pre-pass.
+ * Two or more string-origin branches in the same ZodUnion are ambiguous because the coercion
+ * system cannot determine which branch the consumer intended.
+ */
+function isStringOrigin(schema: ZodType): boolean {
+  if (schema instanceof ZodReadonly) return isStringOrigin(schema.unwrap() as ZodType);
+  if (schema instanceof ZodOptional) return isStringOrigin(schema.unwrap() as ZodType);
+  if (schema instanceof z.ZodString) return true;
+  if (schema instanceof z.ZodNumber) return true;
+  if (schema instanceof z.ZodBoolean) return true;
+  if (schema instanceof ZodEnum) return true;
+  if (schema instanceof ZodLiteral) return typeof schema.value === "string";
+  return false;
+}
+
+/**
+ * Recursively walks a params schema and throws if any ZodUnion contains more than one
+ * string-origin branch. Such unions are inherently ambiguous in a URL context because all
+ * incoming values are plain strings and the coercion system cannot decide which branch wins.
+ *
+ * @param schema - the schema to validate
+ * @param path - dot-separated field path for error messages (e.g. "filters.0.value")
+ */
+export function assertNoAmbiguousUnions(schema: ZodType, path = ""): void {
+  if (schema instanceof ZodReadonly) return assertNoAmbiguousUnions(schema.unwrap() as ZodType, path);
+  if (schema instanceof ZodOptional) return assertNoAmbiguousUnions(schema.unwrap() as ZodType, path);
+
+  if (schema instanceof ZodUnion) {
+    const stringOriginBranches = (schema.options as ZodType[]).filter(isStringOrigin);
+    if (stringOriginBranches.length > 1) {
+      const at = path ? ` at field "${path}"` : "";
+      const branches = stringOriginBranches.map((b) => b.constructor.name).join(", ");
+      throw new Error(
+        `paramsValidation contains an ambiguous union${at}: multiple branches (${branches}) can all match a raw URL string. ` +
+          `Use a single unambiguous type, or use z.preprocess() to handle the conversion explicitly.`,
+      );
+    }
+    // recurse into each branch to catch nested unions
+    for (const branch of schema.options as ZodType[]) {
+      assertNoAmbiguousUnions(branch, path);
+    }
+    return;
+  }
+
+  if (schema instanceof ZodObject) {
+    for (const [key, value] of Object.entries(schema.shape as Record<string, ZodType>)) {
+      assertNoAmbiguousUnions(value, path ? `${path}.${key}` : key);
+    }
+    return;
+  }
+
+  if (schema instanceof ZodArray) {
+    assertNoAmbiguousUnions(schema.element as ZodType, path ? `${path}[]` : "[]");
+    return;
+  }
+}
+
 function assertPathParamsInSchema(path: string, paramsValidation: ZodType): void {
   const pathParams = extractParamNames(path as Parameters<typeof extractParamNames>[0]);
   if (pathParams.length === 0) return;
@@ -91,7 +150,10 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"get", PATH, PERMISSION, PARAMS extends ZodType ? PARAMS : UrlParamsSchema<PATH>, OUT> => {
-      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (paramsValidation) {
+        assertPathParamsInSchema(path, paramsValidation);
+        assertNoAmbiguousUnions(paramsValidation);
+      }
       if (aliases) {
         for (const alias of aliases) {
           if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
@@ -123,7 +185,10 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
-      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (paramsValidation) {
+        assertPathParamsInSchema(path, paramsValidation);
+        assertNoAmbiguousUnions(paramsValidation);
+      }
       if (aliases) {
         for (const alias of aliases) {
           if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
@@ -151,7 +216,10 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"options", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
-      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (paramsValidation) {
+        assertPathParamsInSchema(path, paramsValidation);
+        assertNoAmbiguousUnions(paramsValidation);
+      }
       if (aliases) {
         for (const alias of aliases) {
           if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
@@ -181,7 +249,10 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"post", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (paramsValidation) {
+        assertPathParamsInSchema(path, paramsValidation);
+        assertNoAmbiguousUnions(paramsValidation);
+      }
       if (aliases) {
         for (const alias of aliases) {
           if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
@@ -213,7 +284,10 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"put", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (paramsValidation) {
+        assertPathParamsInSchema(path, paramsValidation);
+        assertNoAmbiguousUnions(paramsValidation);
+      }
       if (aliases) {
         for (const alias of aliases) {
           if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
@@ -245,7 +319,10 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"patch", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (paramsValidation) {
+        assertPathParamsInSchema(path, paramsValidation);
+        assertNoAmbiguousUnions(paramsValidation);
+      }
       if (aliases) {
         for (const alias of aliases) {
           if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);

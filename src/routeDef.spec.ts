@@ -212,3 +212,140 @@ describe("aliases", () => {
     expect(route.aliases).toEqual(["/legacy/items/:itemId", "/v1/items/:itemId"]);
   });
 });
+
+describe("paramsValidation ambiguous union detection", () => {
+  describe("throws for ambiguous unions", () => {
+    test("z.string().or(z.number()) is ambiguous", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.string().or(z.number()) }))).toThrow(
+        /ambiguous union/,
+      );
+    });
+
+    test("z.number().or(z.string()) is ambiguous — order does not matter", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.number().or(z.string()) }))).toThrow(
+        /ambiguous union/,
+      );
+    });
+
+    test("z.string().or(z.boolean()) is ambiguous", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.string().or(z.boolean()) }))).toThrow(
+        /ambiguous union/,
+      );
+    });
+
+    test("z.number().or(z.boolean()) is ambiguous", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.number().or(z.boolean()) }))).toThrow(
+        /ambiguous union/,
+      );
+    });
+
+    test("z.string().or(z.literal('foo')) is ambiguous — literal is string-origin", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.string().or(z.literal("foo")) }))).toThrow(
+        /ambiguous union/,
+      );
+    });
+
+    test("z.string().or(z.number()).optional() is ambiguous — unwraps optional", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.string().or(z.number()).optional() }))).toThrow(
+        /ambiguous union/,
+      );
+    });
+
+    test("nested object field — error message contains the field path", () => {
+      expect(() =>
+        def.get("/", "admin", z.object({}), z.object({ outer: z.object({ v: z.string().or(z.number()) }) })),
+      ).toThrow(/outer\.v/);
+    });
+
+    test("array element — throws for ambiguous union inside array", () => {
+      expect(() =>
+        def.get("/", "admin", z.object({}), z.object({ items: z.array(z.string().or(z.number())) })),
+      ).toThrow(/ambiguous union/);
+    });
+
+    test("error message contains hint about the fix", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.string().or(z.number()) }))).toThrow(
+        /z\.preprocess/,
+      );
+    });
+
+    test("del builder also validates", () => {
+      expect(() => def.del("/", "admin", z.object({}), z.object({ v: z.string().or(z.number()) }))).toThrow(
+        /ambiguous union/,
+      );
+    });
+
+    test("post builder also validates", () => {
+      expect(() =>
+        def.post(
+          "/",
+          "admin",
+          z.object({ name: z.string() }),
+          z.object({}),
+          z.object({ v: z.string().or(z.number()) }),
+        ),
+      ).toThrow(/ambiguous union/);
+    });
+
+    test("put builder also validates", () => {
+      expect(() =>
+        def.put("/", "admin", z.object({ name: z.string() }), z.object({}), z.object({ v: z.string().or(z.number()) })),
+      ).toThrow(/ambiguous union/);
+    });
+
+    test("patch builder also validates", () => {
+      expect(() =>
+        def.patch(
+          "/",
+          "admin",
+          z.object({ name: z.string() }),
+          z.object({}),
+          z.object({ v: z.string().or(z.number()) }),
+        ),
+      ).toThrow(/ambiguous union/);
+    });
+  });
+
+  describe("does not throw for unambiguous schemas", () => {
+    test("z.number() alone is fine", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.number() }))).not.toThrow();
+    });
+
+    test("z.string() alone is fine", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.string() }))).not.toThrow();
+    });
+
+    test("z.boolean() alone is fine", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.boolean() }))).not.toThrow();
+    });
+
+    test("z.boolean().or(z.object({...})) — only one string-origin branch is fine", () => {
+      expect(() =>
+        def.get("/", "admin", z.object({}), z.object({ v: z.boolean().or(z.object({ x: z.string() })) })),
+      ).not.toThrow();
+    });
+
+    test("union of two objects — neither is string-origin at union level", () => {
+      expect(() =>
+        def.get(
+          "/",
+          "admin",
+          z.object({}),
+          z.object({ v: z.object({ a: z.number() }).or(z.object({ b: z.string() })) }),
+        ),
+      ).not.toThrow();
+    });
+
+    test("z.literal with a number value is not string-origin", () => {
+      expect(() => def.get("/", "admin", z.object({}), z.object({ v: z.number().or(z.literal(42)) }))).not.toThrow();
+    });
+
+    test("auto-generated urlToZodSchema never contains ambiguous unions", () => {
+      expect(() => def.get("/:id/:name?", "admin", z.object({}))).not.toThrow();
+    });
+
+    test("omitting paramsValidation entirely is fine", () => {
+      expect(() => def.get("/no-params", "admin", z.object({}))).not.toThrow();
+    });
+  });
+});

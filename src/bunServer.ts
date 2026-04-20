@@ -76,7 +76,8 @@ export const serveHotBuns = async (
   };
   const ssl = confIn.https === "generate" ? await genCert() : confIn.https;
   // When using ssl, redirect non ssl requests to ssl port 443
-  if (ssl && (!confIn.port || confIn.port === 443 || confIn.port === 80)) {
+  const sslPort = confIn.port ?? 443;
+  if (ssl && sslPort !== 80) {
     Bun.serve({
       port: 80,
       hostname: confIn.hostname || "0.0.0.0",

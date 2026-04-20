@@ -59,10 +59,6 @@ const unionHandler = <RETURN>(
   input: unknown,
   parser: (z: ZodType, input: unknown) => RETURN,
 ): RETURN => {
-  //This function is kinda fine,
-  // but due to the design there is an edge case
-  // when there is a union of a string and something that the parser can parse, and both would be valid, it will parse it, possibly making it it invalid.
-  // TODO make a test case to demondtrate that
   return schema.options
     .map((x) => parser(x as z.ZodType, input))
     .filter((x) => x !== undefined)

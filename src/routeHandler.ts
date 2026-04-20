@@ -18,24 +18,17 @@ import { VerboseErrorOutput } from "./env.ts";
 export type Promisable<T> = T | Promise<T>;
 export type PromisableProperties<T> = T extends object ? { [K in keyof T]: Promisable<T[K]> } : T;
 
-export type HandlerWithoutBodyFn<
-  USER,
-  PARAMS extends z.ZodType,
-  OUT extends z.ZodType,
-  PREFIX extends string = never,
-> = (params: z.infer<PARAMS>, user: USER, prefix?: PREFIX) => Promisable<PromisableProperties<z.infer<OUT>>>;
+export type HandlerWithoutBodyFn<USER, PARAMS extends z.ZodType, OUT extends z.ZodType> = (
+  params: z.infer<PARAMS>,
+  user: USER,
+  prefix?: string,
+) => Promisable<PromisableProperties<z.infer<OUT>>>;
 
-export type HandlerWithBodyFn<
-  USER,
-  PARAMS extends z.ZodType,
-  BODY extends z.ZodType,
-  OUT extends z.ZodType,
-  PREFIX extends string = never,
-> = (
+export type HandlerWithBodyFn<USER, PARAMS extends z.ZodType, BODY extends z.ZodType, OUT extends z.ZodType> = (
   params: z.infer<PARAMS>,
   body: z.infer<BODY>,
   user: USER,
-  prefix?: PREFIX,
+  prefix?: string,
 ) => Promisable<PromisableProperties<z.infer<OUT>>>;
 
 export type HandlerBothFn<
@@ -44,11 +37,10 @@ export type HandlerBothFn<
   PARAMS extends z.ZodType,
   BODY extends z.ZodType,
   OUT extends z.ZodType,
-  PREFIX extends string = never,
 > = METHOD extends HTTPMethodsWithBody
-  ? HandlerWithBodyFn<USER, PARAMS, BODY, OUT, PREFIX>
+  ? HandlerWithBodyFn<USER, PARAMS, BODY, OUT>
   : METHOD extends HTTPMethodsWithoutBody
-    ? HandlerWithoutBodyFn<USER, PARAMS, OUT, PREFIX>
+    ? HandlerWithoutBodyFn<USER, PARAMS, OUT>
     : never;
 
 export type FormatOutputReturnStructure = {
@@ -89,14 +81,7 @@ export type DefineType<PERMISSION, USER> = <
   BODY extends z.ZodType,
   OUT extends z.ZodType,
   PREFIX extends string = never,
-  HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT, PREFIX> = HandlerBothFn<
-    METHOD,
-    USER,
-    PARAMS,
-    BODY,
-    OUT,
-    PREFIX
-  >,
+  HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT> = HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
 >(
   routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>,
   handler: HANDLER,
@@ -169,10 +154,9 @@ export const wrapHandler = <
   PARAMS extends z.ZodType,
   BODY extends z.ZodType,
   OUT extends z.ZodType,
-  PREFIX extends string = never,
 >(
-  route: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>,
-  handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT, PREFIX>,
+  route: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, string>,
+  handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
   formatOutput: FormatOutput<PARAMS, OUT, USER> | undefined,
   authorizer: (
     user: USER,
@@ -206,7 +190,7 @@ export const wrapHandler = <
     }
   };
 
-  return async (req: Request, prefix?: string): Promise<Response> => {
+  const handler_ = async (req: Request, prefix?: string): Promise<Response> => {
     let user: USER | undefined;
     const acceptType = req.headers.get("accept") || "";
     const er = (message: string | object, status: number) =>
@@ -276,20 +260,16 @@ export const wrapHandler = <
         if (!body.success) {
           return er("Body does not match defined schema: " + body.error.message, 400);
         }
-        // The casts are not nice but there is no other way, we know the type is correct, it's enforced on calls,
-        // but TS cannot make the distinction based on the if statement above
-        result = await (handler as HandlerWithBodyFn<USER, PARAMS, BODY, OUT, PREFIX>)(
+        // The cast is needed because TS cannot narrow the handler type based on the if statement above
+        result = await (handler as HandlerWithBodyFn<USER, PARAMS, BODY, OUT>)(
           queryParams.data,
           body.data,
           user,
-          prefix as PREFIX | undefined,
+          prefix,
         );
       } else {
-        result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT, PREFIX>)(
-          queryParams.data,
-          user,
-          prefix as PREFIX | undefined,
-        );
+        result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT>)(queryParams.data, user, prefix);
+        // ditto — cast is for method narrowing only, not type unsafety
       }
 
       if (formatOutput) {
@@ -346,6 +326,7 @@ export const wrapHandler = <
       return er(VerboseErrorOutput ? { error: msg, message: additionalInfo, stack } : msg, 500);
     }
   };
+  return handler_;
 };
 
 export type RouteHandlerOptions<USER> = {
@@ -371,14 +352,7 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
     BODY extends z.ZodType,
     OUT extends z.ZodType,
     PREFIX extends string = never,
-    HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT, PREFIX> = HandlerBothFn<
-      METHOD,
-      USER,
-      PARAMS,
-      BODY,
-      OUT,
-      PREFIX
-    >,
+    HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT> = HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
   >(
     routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>,
     handler: HANDLER,
@@ -386,7 +360,7 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
   ) => {
     return {
       ...routeDef,
-      handlerWrapped: wrapHandler<USER, PERMISSION, METHOD, PATH, PARAMS, BODY, OUT, PREFIX>(
+      handlerWrapped: wrapHandler<USER, PERMISSION, METHOD, PATH, PARAMS, BODY, OUT>(
         routeDef,
         handler,
         // Safe: Awaited<ReturnType<HANDLER>> is always a subtype of PromisableProperties<z.infer<OUT>>

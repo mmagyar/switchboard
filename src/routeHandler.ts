@@ -79,7 +79,7 @@ export type RouteWithHandler<
   OUT extends z.ZodType,
   PREFIX extends string = never,
 > = Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX> & {
-  handlerWrapped: (req: Request, prefix?: PREFIX | undefined) => Promise<Response>;
+  handlerWrapped: (req: Request, prefix?: string) => Promise<Response>;
 };
 
 export type DefineType<PERMISSION, USER> = <
@@ -186,7 +186,7 @@ export const wrapHandler = <
     errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>;
     errorLogger?: (...args: unknown[]) => void;
   },
-): ((req: Request, prefix?: PREFIX | undefined) => Promise<Response>) => {
+): ((req: Request, prefix?: string) => Promise<Response>) => {
   const { outputErrorWarning, errorParser, errorHtmlFormatter, errorLogger = console.error } = options ?? {};
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = route;
 
@@ -206,7 +206,7 @@ export const wrapHandler = <
     }
   };
 
-  return async (req: Request, prefix?: PREFIX | undefined): Promise<Response> => {
+  return async (req: Request, prefix?: string): Promise<Response> => {
     let user: USER | undefined;
     const acceptType = req.headers.get("accept") || "";
     const er = (message: string | object, status: number) =>
@@ -282,10 +282,14 @@ export const wrapHandler = <
           queryParams.data,
           body.data,
           user,
-          prefix,
+          prefix as PREFIX | undefined,
         );
       } else {
-        result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT, PREFIX>)(queryParams.data, user, prefix);
+        result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT, PREFIX>)(
+          queryParams.data,
+          user,
+          prefix as PREFIX | undefined,
+        );
       }
 
       if (formatOutput) {

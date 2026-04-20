@@ -94,8 +94,8 @@ export const createClient =
       }
     });
 
-    if (!((settings.validateReturn ?? true) === false || response === undefined)) {
-      return route.outputValidation.parse(response) as z.infer<OUT>;
+    if (settings.validateReturn !== false && response !== undefined) {
+      return route.outputValidation.parse(response);
     }
 
     return response;

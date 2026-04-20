@@ -22,8 +22,8 @@ type TrieNode = {
 export type RegisterableRoute = {
   method: HTTPMethods;
   path: string;
-  aliases?: string[];
-  handlerWrapped: (req: Request) => Promise<Response> | Response;
+  prefixes?: readonly string[];
+  handlerWrapped: (req: Request, prefix: string | undefined) => Promise<Response> | Response;
 };
 
 const makeNode = (): TrieNode => ({
@@ -121,11 +121,11 @@ export class Router {
   ): void {
     let method: HTTPMethods;
     let normalized: string;
-    let resolvedHandler: (req: Request) => Promise<Response> | Response;
+    let resolvedHandler: (req: Request) => Promise<Response> | Response = () =>
+      new Response("unreachable", { status: 500 });
 
     if (typeof routeOrMethod === "object") {
       method = routeOrMethod.method;
-      resolvedHandler = routeOrMethod.handlerWrapped;
       normalized = routeOrMethod.path.startsWith("/") ? routeOrMethod.path : `/${routeOrMethod.path}`;
       checkRouteOptionalParameterOrder(normalized as ValidateOptionalUrl<string>);
     } else {
@@ -141,19 +141,29 @@ export class Router {
       throw new Error(`Duplicate route: ${method.toUpperCase()} ${normalized}`);
     }
     this.registeredRoutes.add(key);
-    trieInsert(this.root, method, normalized, resolvedHandler);
 
-    if (typeof routeOrMethod === "object" && routeOrMethod.aliases) {
-      for (const alias of routeOrMethod.aliases) {
-        const normalizedAlias = alias.startsWith("/") ? alias : `/${alias}`;
-        checkRouteOptionalParameterOrder(normalizedAlias as ValidateOptionalUrl<string>);
-        const aliasKey = `${method}:${normalizedAlias}`;
-        if (this.registeredRoutes.has(aliasKey)) {
-          throw new Error(`Duplicate route: ${method.toUpperCase()} ${normalizedAlias}`);
+    if (typeof routeOrMethod === "object") {
+      const route = routeOrMethod;
+      trieInsert(this.root, method, normalized, (req) => route.handlerWrapped(req, undefined));
+
+      if (route.prefixes) {
+        for (const prefix of route.prefixes) {
+          const prefixedPath = `/${prefix}${normalized}`;
+          const prefixKey = `${method}:${prefixedPath}`;
+          if (this.registeredRoutes.has(prefixKey)) {
+            throw new Error(`Duplicate route: ${method.toUpperCase()} ${prefixedPath}`);
+          }
+          this.registeredRoutes.add(prefixKey);
+          const capturedPrefix = prefix;
+          trieInsert(this.root, method, prefixedPath, (req) => {
+            const url = new URL(req.url);
+            url.pathname = url.pathname.replace(new RegExp(`^/${capturedPrefix}`), "") || "/";
+            return route.handlerWrapped(new Request(url.toString(), req), capturedPrefix);
+          });
         }
-        this.registeredRoutes.add(aliasKey);
-        trieInsert(this.root, method, normalizedAlias, resolvedHandler);
       }
+    } else {
+      trieInsert(this.root, method, normalized, resolvedHandler);
     }
   }
 

@@ -32,24 +32,14 @@ export type Route<
   PARAMS extends ZodType,
   BODY extends ZodType = z.ZodTypeAny,
   OUT extends ZodType = z.ZodTypeAny,
+  PREFIX extends string = never,
 > = METHOD extends HTTPMethodsWithBody
-  ? RouteWithBody<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>
+  ? RouteWithBody<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>
   : METHOD extends HTTPMethodsWithoutBody
-    ? RouteWithoutBody<METHOD, PATH, PERMISSION, PARAMS, OUT>
+    ? RouteWithoutBody<METHOD, PATH, PERMISSION, PARAMS, OUT, PREFIX>
     : never;
-type MaybeZodType = ZodType | undefined;
 
-function assertAliasParamNamesMatch(canonicalPath: string, alias: string): void {
-  const canonicalParams = extractParamNames(canonicalPath as Parameters<typeof extractParamNames>[0]).sort();
-  const aliasParams = extractParamNames(alias as Parameters<typeof extractParamNames>[0]).sort();
-  const sameLength = canonicalParams.length === aliasParams.length;
-  const sameNames = sameLength && canonicalParams.every((p, i) => p === aliasParams[i]);
-  if (!sameNames) {
-    throw new Error(
-      `Route alias "${alias}" has different param names than canonical path "${canonicalPath}". Canonical params: [${canonicalParams.join(", ")}], alias params: [${aliasParams.join(", ")}]`,
-    );
-  }
-}
+type MaybeZodType = ZodType | undefined;
 
 /**
  * Returns true if a schema branch is "string-origin" — i.e. it can receive a raw string
@@ -129,24 +119,21 @@ function assertPathParamsInSchema(path: string, paramsValidation: ZodType): void
   }
 }
 
-type MaybeUrl<PATH extends string, T extends MaybeZodType = undefined> = T extends ZodType ? T : UrlParamsSchema<PATH>;
-
-function validateParamsAndAliases(
-  path: string,
-  paramsValidation: ZodType | undefined,
-  aliases: string[] | undefined,
-): void {
+function validateParams(path: string, paramsValidation: ZodType | undefined): void {
   if (paramsValidation) {
     assertPathParamsInSchema(path, paramsValidation);
     assertNoAmbiguousUnions(paramsValidation);
   }
-  if (aliases) {
-    for (const alias of aliases) {
-      if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
-      assertAliasParamNamesMatch(path, alias);
-    }
+}
+
+function assertValidPrefixes(prefixes: readonly string[]): void {
+  for (const p of prefixes) {
+    if (p.startsWith("/")) throw new Error(`Prefix "${p}" must not start with a slash`);
+    if (p.includes(":")) throw new Error(`Prefix "${p}" must not contain path params`);
   }
 }
+
+type MaybeUrl<PATH extends string, T extends MaybeZodType = undefined> = T extends ZodType ? T : UrlParamsSchema<PATH>;
 
 export const define = <PERMISSION>() => {
   return {
@@ -155,28 +142,29 @@ export const define = <PERMISSION>() => {
      * @param permissionsNeeded
      * @param outputValidation
      * @param paramsValidation
+     * @param prefixes
      */
     get: <
       PATH extends string,
       PARAMS extends MaybeZodType = undefined,
       OUT extends ZodType = never,
-      ALIASES extends string[] = never[],
+      PREFIXES extends readonly string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
-    ): RouteWithoutBody<"get", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
-      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
+      prefixes?: readonly [...PREFIXES],
+    ): RouteWithoutBody<"get", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT, PREFIXES[number]> => {
+      validateParams(path, paramsValidation);
+      if (prefixes && prefixes.length > 0) assertValidPrefixes(prefixes);
       return {
         method: "get",
         path,
         permissionsNeeded,
-        //Can't really get the compiler to realize the correct type without casting
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         outputValidation,
-        ...(aliases && aliases.length > 0 ? { aliases } : {}),
+        ...(prefixes && prefixes.length > 0 ? { prefixes } : {}),
       };
     },
 
@@ -184,22 +172,23 @@ export const define = <PERMISSION>() => {
       PATH extends string,
       PARAMS extends MaybeZodType = undefined,
       OUT extends ZodType = never,
-      ALIASES extends string[] = never[],
+      PREFIXES extends readonly string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
-    ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
-      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
+      prefixes?: readonly [...PREFIXES],
+    ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT, PREFIXES[number]> => {
+      validateParams(path, paramsValidation);
+      if (prefixes && prefixes.length > 0) assertValidPrefixes(prefixes);
       return {
         method: "delete",
         path,
         permissionsNeeded,
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         outputValidation,
-        ...(aliases && aliases.length > 0 ? { aliases } : {}),
+        ...(prefixes && prefixes.length > 0 ? { prefixes } : {}),
       };
     },
 
@@ -207,22 +196,23 @@ export const define = <PERMISSION>() => {
       PATH extends string,
       PARAMS extends MaybeZodType = undefined,
       OUT extends ZodType = never,
-      ALIASES extends string[] = never[],
+      PREFIXES extends readonly string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
-    ): RouteWithoutBody<"options", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
-      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
+      prefixes?: readonly [...PREFIXES],
+    ): RouteWithoutBody<"options", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT, PREFIXES[number]> => {
+      validateParams(path, paramsValidation);
+      if (prefixes && prefixes.length > 0) assertValidPrefixes(prefixes);
       return {
         method: "options",
         path,
         permissionsNeeded,
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         outputValidation,
-        ...(aliases && aliases.length > 0 ? { aliases } : {}),
+        ...(prefixes && prefixes.length > 0 ? { prefixes } : {}),
       };
     },
 
@@ -231,16 +221,17 @@ export const define = <PERMISSION>() => {
       PARAMS extends MaybeZodType = undefined,
       BODY extends ZodType = never,
       OUT extends ZodType = never,
-      ALIASES extends string[] = never[],
+      PREFIXES extends readonly string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
-    ): RouteWithBody<"post", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
+      prefixes?: readonly [...PREFIXES],
+    ): RouteWithBody<"post", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT, PREFIXES[number]> => {
+      validateParams(path, paramsValidation);
+      if (prefixes && prefixes.length > 0) assertValidPrefixes(prefixes);
       return {
         method: "post",
         path,
@@ -248,7 +239,7 @@ export const define = <PERMISSION>() => {
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         bodyValidation,
         outputValidation,
-        ...(aliases && aliases.length > 0 ? { aliases } : {}),
+        ...(prefixes && prefixes.length > 0 ? { prefixes } : {}),
       };
     },
 
@@ -257,16 +248,17 @@ export const define = <PERMISSION>() => {
       PARAMS extends MaybeZodType = undefined,
       BODY extends ZodType = never,
       OUT extends ZodType = never,
-      ALIASES extends string[] = never[],
+      PREFIXES extends readonly string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
-    ): RouteWithBody<"put", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
+      prefixes?: readonly [...PREFIXES],
+    ): RouteWithBody<"put", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT, PREFIXES[number]> => {
+      validateParams(path, paramsValidation);
+      if (prefixes && prefixes.length > 0) assertValidPrefixes(prefixes);
       return {
         method: "put",
         path,
@@ -274,7 +266,7 @@ export const define = <PERMISSION>() => {
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         bodyValidation,
         outputValidation,
-        ...(aliases && aliases.length > 0 ? { aliases } : {}),
+        ...(prefixes && prefixes.length > 0 ? { prefixes } : {}),
       };
     },
 
@@ -283,16 +275,17 @@ export const define = <PERMISSION>() => {
       PARAMS extends MaybeZodType = undefined,
       BODY extends ZodType = never,
       OUT extends ZodType = never,
-      ALIASES extends string[] = never[],
+      PREFIXES extends readonly string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
-    ): RouteWithBody<"patch", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
+      prefixes?: readonly [...PREFIXES],
+    ): RouteWithBody<"patch", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT, PREFIXES[number]> => {
+      validateParams(path, paramsValidation);
+      if (prefixes && prefixes.length > 0) assertValidPrefixes(prefixes);
       return {
         method: "patch",
         path,
@@ -300,7 +293,7 @@ export const define = <PERMISSION>() => {
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         bodyValidation,
         outputValidation,
-        ...(aliases && aliases.length > 0 ? { aliases } : {}),
+        ...(prefixes && prefixes.length > 0 ? { prefixes } : {}),
       };
     },
   };

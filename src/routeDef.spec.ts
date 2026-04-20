@@ -150,72 +150,46 @@ test("if a part ends with _id it will be parsed as number", () => {
   expect(withCamelCase.shape.them).toBeInstanceOf(ZodOptional);
 });
 
-describe("aliases", () => {
-  test("no error when aliases use the same param names as canonical path", () => {
-    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items/:itemId"])).not.toThrow();
+describe("prefixes", () => {
+  test("no error when valid prefixes are provided", () => {
+    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["api", "v1"])).not.toThrow();
   });
 
-  test("returned route object carries the aliases array", () => {
-    const route = def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items/:itemId"]);
-    expect(route.aliases).toEqual(["/legacy/items/:itemId"]);
+  test("returned route object carries the prefixes array", () => {
+    const route = def.get("/items/:itemId", "admin", z.object({}), undefined, ["api"]);
+    expect(route.prefixes).toEqual(["api"]);
   });
 
-  test("aliases key is omitted when no aliases are provided", () => {
+  test("prefixes key is omitted when no prefixes are provided", () => {
     const route = def.get("/items/:itemId", "admin", z.object({}));
-    expect(route.aliases).toBeUndefined();
+    expect(route.prefixes).toBeUndefined();
   });
 
-  test("aliases key is omitted when empty array is provided", () => {
+  test("prefixes key is omitted when empty array is provided", () => {
     const route = def.get("/items/:itemId", "admin", z.object({}), undefined, []);
-    expect(route.aliases).toBeUndefined();
+    expect(route.prefixes).toBeUndefined();
   });
 
-  test("throws when alias has different param names than canonical path", () => {
-    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items/:legacyId"])).toThrow(
-      /different param names/i,
+  test("throws when a prefix starts with a slash", () => {
+    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["/api"] as any)).toThrow(
+      /must not start with a slash/i,
     );
   });
 
-  test("throws when alias is missing a param that canonical path has", () => {
-    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items"])).toThrow(
-      /different param names/i,
+  test("throws when a prefix contains a colon (path param)", () => {
+    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["api/:version"] as any)).toThrow(
+      /must not contain path params/i,
     );
   });
 
-  test("throws when alias param is missing from explicit paramsValidation schema", () => {
-    const schema = z.object({ itemId: z.number() });
-    // alias uses same param names so assertAliasParamNamesMatch passes,
-    // but assertPathParamsInSchema for the alias against the schema should also pass
-    expect(() => def.get("/items/:itemId", "admin", z.object({}), schema, ["/v2/items/:itemId"])).not.toThrow();
+  test("post builder accepts prefixes", () => {
+    const route = def.post("/items/:itemId", "admin", z.object({ name: z.string() }), z.object({}), undefined, ["api"]);
+    expect(route.prefixes).toEqual(["api"]);
   });
 
-  test("post builder accepts aliases", () => {
-    const route = def.post("/items/:itemId", "admin", z.object({ name: z.string() }), z.object({}), undefined, [
-      "/legacy/items/:itemId",
-    ]);
-    expect(route.aliases).toEqual(["/legacy/items/:itemId"]);
-  });
-
-  test("post builder throws when alias has mismatched params", () => {
-    expect(() =>
-      def.post("/items/:itemId", "admin", z.object({ name: z.string() }), z.object({}), undefined, [
-        "/legacy/items/:otherId",
-      ]),
-    ).toThrow(/different param names/i);
-  });
-
-  test("throws when alias has invalid optional-param order (mandatory after optional)", () => {
-    expect(() =>
-      def.get("/items/:itemId", "admin", z.object({}), undefined, ["/items/:itemId?/:other"] as any),
-    ).toThrow(/optional/i);
-  });
-
-  test("multiple valid aliases are all stored", () => {
-    const route = def.get("/items/:itemId", "admin", z.object({}), undefined, [
-      "/legacy/items/:itemId",
-      "/v1/items/:itemId",
-    ]);
-    expect(route.aliases).toEqual(["/legacy/items/:itemId", "/v1/items/:itemId"]);
+  test("multiple valid prefixes are all stored", () => {
+    const route = def.get("/items/:itemId", "admin", z.object({}), undefined, ["api", "v1"]);
+    expect(route.prefixes).toEqual(["api", "v1"]);
   });
 });
 

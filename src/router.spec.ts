@@ -331,73 +331,106 @@ test("addRoute route-object normalises paths without leading slash", async () =>
   expect(found).toBeDefined();
 });
 
-// ── aliases ───────────────────────────────────────────────────────────────────
+// ── prefixes ──────────────────────────────────────────────────────────────────
 
-test("addRoute registers all aliases from a RegisterableRoute", async () => {
+test("addRoute registers all prefix paths from a RegisterableRoute", async () => {
   const r = new Router();
   const route: RegisterableRoute = {
     method: "get",
-    path: "/items/:itemId",
-    aliases: ["/legacy/items/:itemId", "/v1/items/:itemId"],
+    path: "/list/:itemId",
+    prefixes: ["hu", "en"],
     handlerWrapped: () => new Response("item"),
   };
   r.addRoute(route);
 
-  expect(r.getRoute("get", new URL("/items/42", url))).toBeDefined();
-  expect(r.getRoute("get", new URL("/legacy/items/42", url))).toBeDefined();
-  expect(r.getRoute("get", new URL("/v1/items/42", url))).toBeDefined();
+  expect(r.getRoute("get", new URL("/list/42", url))).toBeDefined();
+  expect(r.getRoute("get", new URL("/hu/list/42", url))).toBeDefined();
+  expect(r.getRoute("get", new URL("/en/list/42", url))).toBeDefined();
 });
 
-test("alias routes dispatch to the same handler as the canonical path", async () => {
+test("canonical path dispatches with undefined prefix", async () => {
   const r = new Router();
+  const receivedPrefixes: Array<string | undefined> = [];
   const route: RegisterableRoute = {
     method: "get",
-    path: "/items/:itemId",
-    aliases: ["/legacy/items/:itemId"],
-    handlerWrapped: () => new Response("shared-handler"),
+    path: "/list/:itemId",
+    prefixes: ["hu"],
+    handlerWrapped: (_req, prefix) => {
+      receivedPrefixes.push(prefix);
+      return new Response("ok");
+    },
   };
   r.addRoute(route);
 
-  const canonical = r.getRoute("get", new URL("/items/1", url));
-  const alias = r.getRoute("get", new URL("/legacy/items/1", url));
-  expect(canonical!.handler).toBe(alias!.handler);
-  expect(await (await canonical!.handler(new Request("https://example.com")))?.text()).toBe("shared-handler");
-  expect(await (await alias!.handler(new Request("https://example.com")))?.text()).toBe("shared-handler");
+  await (await r.handleRequest(new Request(`${url}/list/1`))).text();
+  expect(receivedPrefixes).toEqual([undefined]);
 });
 
-test("throws when alias duplicates an already-registered path", () => {
+test("prefix path dispatches with correct prefix string", async () => {
   const r = new Router();
-  r.addRoute("get", "/legacy/items/:itemId", () => new Response("existing"));
+  const receivedPrefixes: Array<string | undefined> = [];
   const route: RegisterableRoute = {
     method: "get",
-    path: "/items/:itemId",
-    aliases: ["/legacy/items/:itemId"],
+    path: "/list/:itemId",
+    prefixes: ["hu", "en"],
+    handlerWrapped: (_req, prefix) => {
+      receivedPrefixes.push(prefix);
+      return new Response("ok");
+    },
+  };
+  r.addRoute(route);
+
+  await (await r.handleRequest(new Request(`${url}/hu/list/1`))).text();
+  await (await r.handleRequest(new Request(`${url}/en/list/1`))).text();
+  expect(receivedPrefixes).toEqual(["hu", "en"]);
+});
+
+test("prefix handler receives URL with prefix stripped (params extracted correctly)", async () => {
+  const r = new Router();
+  let receivedUrl = "";
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/list/:itemId",
+    prefixes: ["hu"],
+    handlerWrapped: (req, _prefix) => {
+      receivedUrl = new URL(req.url).pathname;
+      return new Response("ok");
+    },
+  };
+  r.addRoute(route);
+
+  await (await r.handleRequest(new Request(`${url}/hu/list/123`))).text();
+  expect(receivedUrl).toBe("/list/123");
+});
+
+test("throws when prefix path duplicates an already-registered path", () => {
+  const r = new Router();
+  r.addRoute("get", "/hu/list/:itemId", () => new Response("existing"));
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/list/:itemId",
+    prefixes: ["hu"],
     handlerWrapped: () => new Response("new"),
   };
   expect(() => r.addRoute(route)).toThrow(/duplicate route/i);
 });
 
-test("throws when alias duplicates the canonical path of the same route", () => {
+test("throws when two routes produce the same prefixed path", () => {
   const r = new Router();
-  const route: RegisterableRoute = {
+  const route1: RegisterableRoute = {
     method: "get",
-    path: "/items/:itemId",
-    aliases: ["/items/:itemId"],
-    handlerWrapped: () => new Response("dup"),
+    path: "/list/:itemId",
+    prefixes: ["hu"],
+    handlerWrapped: () => new Response("first"),
   };
-  expect(() => r.addRoute(route)).toThrow(/duplicate route/i);
-});
-
-test("alias without leading slash is normalised correctly", async () => {
-  const r = new Router();
-  const route: RegisterableRoute = {
+  const route2: RegisterableRoute = {
     method: "get",
-    path: "/items/:itemId",
-    aliases: ["legacy/items/:itemId"],
-    handlerWrapped: () => new Response("ok"),
+    path: "/list/:itemId",
+    prefixes: ["hu"],
+    handlerWrapped: () => new Response("second"),
   };
-  r.addRoute(route);
-  expect(r.getRoute("get", new URL("/legacy/items/5", url))).toBeDefined();
+  r.addRoute(route1);
+  expect(() => r.addRoute(route2)).toThrow(/duplicate route/i);
 });
 
 // ── trie static-priority + fallback behaviour ─────────────────────────────────

@@ -1,10 +1,16 @@
 import type { ZodType } from "zod";
 import type { HTTPMethods, HTTPMethodsWithBody, HTTPMethodsWithoutBody } from "./staticDefs.ts";
 
-export interface RouteBase<PATH extends string, PERMISSION, PARAMS extends ZodType, OUT extends ZodType> {
+export interface RouteBase<
+  PATH extends string,
+  PERMISSION,
+  PARAMS extends ZodType,
+  OUT extends ZodType,
+  PREFIX extends string = never,
+> {
   method: HTTPMethods;
   path: PATH;
-  aliases?: string[];
+  prefixes?: readonly PREFIX[];
   permissionsNeeded: PERMISSION;
   paramsValidation: PARAMS;
   bodyValidation?: undefined;
@@ -17,7 +23,8 @@ export interface RouteWithoutBody<
   PERMISSION,
   PARAMS extends ZodType,
   OUT extends ZodType,
-> extends Omit<RouteBase<PATH, PERMISSION, PARAMS, OUT>, "method"> {
+  PREFIX extends string = never,
+> extends Omit<RouteBase<PATH, PERMISSION, PARAMS, OUT, PREFIX>, "method"> {
   method: METHOD;
 }
 
@@ -28,7 +35,8 @@ export type RouteWithBody<
   PARAMS extends ZodType,
   BODY extends ZodType,
   OUT extends ZodType,
-> = Omit<RouteBase<PATH, PERMISSION, PARAMS, OUT>, "method" | "bodyValidation"> & {
+  PREFIX extends string = never,
+> = Omit<RouteBase<PATH, PERMISSION, PARAMS, OUT, PREFIX>, "method" | "bodyValidation"> & {
   method: METHOD;
   bodyValidation: BODY;
 };

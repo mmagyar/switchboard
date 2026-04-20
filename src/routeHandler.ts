@@ -18,15 +18,24 @@ import { VerboseErrorOutput } from "./env.ts";
 export type Promisable<T> = T | Promise<T>;
 export type PromisableProperties<T> = T extends object ? { [K in keyof T]: Promisable<T[K]> } : T;
 
-export type HandlerWithoutBodyFn<USER, PARAMS extends z.ZodType, OUT extends z.ZodType> = (
-  params: z.infer<PARAMS>,
-  user: USER,
-) => Promisable<PromisableProperties<z.infer<OUT>>>;
+export type HandlerWithoutBodyFn<
+  USER,
+  PARAMS extends z.ZodType,
+  OUT extends z.ZodType,
+  PREFIX extends string = never,
+> = (params: z.infer<PARAMS>, user: USER, prefix?: PREFIX) => Promisable<PromisableProperties<z.infer<OUT>>>;
 
-export type HandlerWithBodyFn<USER, PARAMS extends z.ZodType, BODY extends z.ZodType, OUT extends z.ZodType> = (
+export type HandlerWithBodyFn<
+  USER,
+  PARAMS extends z.ZodType,
+  BODY extends z.ZodType,
+  OUT extends z.ZodType,
+  PREFIX extends string = never,
+> = (
   params: z.infer<PARAMS>,
   body: z.infer<BODY>,
   user: USER,
+  prefix?: PREFIX,
 ) => Promisable<PromisableProperties<z.infer<OUT>>>;
 
 export type HandlerBothFn<
@@ -35,10 +44,11 @@ export type HandlerBothFn<
   PARAMS extends z.ZodType,
   BODY extends z.ZodType,
   OUT extends z.ZodType,
+  PREFIX extends string = never,
 > = METHOD extends HTTPMethodsWithBody
-  ? HandlerWithBodyFn<USER, PARAMS, BODY, OUT>
+  ? HandlerWithBodyFn<USER, PARAMS, BODY, OUT, PREFIX>
   : METHOD extends HTTPMethodsWithoutBody
-    ? HandlerWithoutBodyFn<USER, PARAMS, OUT>
+    ? HandlerWithoutBodyFn<USER, PARAMS, OUT, PREFIX>
     : never;
 
 export type FormatOutputReturnStructure = {
@@ -60,8 +70,6 @@ export type FormatOutput<
   RAW = PromisableProperties<z.infer<OUT>>,
 > = (data: RAW, user: U, request: Request, params: z.infer<PARAMS>) => FormatOutputReturn;
 
-type ReqRes = (req: Request) => Promise<Response>;
-
 export type RouteWithHandler<
   METHOD extends HTTPMethods,
   PATH extends string,
@@ -69,8 +77,9 @@ export type RouteWithHandler<
   PARAMS extends z.ZodType,
   BODY extends z.ZodType,
   OUT extends z.ZodType,
-> = Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT> & {
-  handlerWrapped: ReqRes;
+  PREFIX extends string = never,
+> = Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX> & {
+  handlerWrapped: (req: Request, prefix?: PREFIX | undefined) => Promise<Response>;
 };
 
 export type DefineType<PERMISSION, USER> = <
@@ -79,12 +88,20 @@ export type DefineType<PERMISSION, USER> = <
   PARAMS extends z.ZodType,
   BODY extends z.ZodType,
   OUT extends z.ZodType,
-  HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
+  PREFIX extends string = never,
+  HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT, PREFIX> = HandlerBothFn<
+    METHOD,
+    USER,
+    PARAMS,
+    BODY,
+    OUT,
+    PREFIX
+  >,
 >(
-  routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
+  routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>,
   handler: HANDLER,
   formatOutput?: FormatOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
-) => RouteWithHandler<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>;
+) => RouteWithHandler<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>;
 
 const errorResponse =
   (contentType: string, errorHtmlFormatter?: (status: number, message: string) => Promise<string>) =>
@@ -152,9 +169,10 @@ export const wrapHandler = <
   PARAMS extends z.ZodType,
   BODY extends z.ZodType,
   OUT extends z.ZodType,
+  PREFIX extends string = never,
 >(
-  route: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
-  handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
+  route: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>,
+  handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT, PREFIX>,
   formatOutput: FormatOutput<PARAMS, OUT, USER> | undefined,
   authorizer: (
     user: USER,
@@ -168,7 +186,7 @@ export const wrapHandler = <
     errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>;
     errorLogger?: (...args: unknown[]) => void;
   },
-): ReqRes => {
+): ((req: Request, prefix?: PREFIX | undefined) => Promise<Response>) => {
   const { outputErrorWarning, errorParser, errorHtmlFormatter, errorLogger = console.error } = options ?? {};
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = route;
 
@@ -188,7 +206,7 @@ export const wrapHandler = <
     }
   };
 
-  return async (req: Request): Promise<Response> => {
+  return async (req: Request, prefix?: PREFIX | undefined): Promise<Response> => {
     let user: USER | undefined;
     const acceptType = req.headers.get("accept") || "";
     const er = (message: string | object, status: number) =>
@@ -260,9 +278,14 @@ export const wrapHandler = <
         }
         // The casts are not nice but there is no other way, we know the type is correct, it's enforced on calls,
         // but TS cannot make the distinction based on the if statement above
-        result = await (handler as HandlerWithBodyFn<USER, PARAMS, BODY, OUT>)(queryParams.data, body.data, user);
+        result = await (handler as HandlerWithBodyFn<USER, PARAMS, BODY, OUT, PREFIX>)(
+          queryParams.data,
+          body.data,
+          user,
+          prefix,
+        );
       } else {
-        result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT>)(queryParams.data, user);
+        result = await (handler as HandlerWithoutBodyFn<USER, PARAMS, OUT, PREFIX>)(queryParams.data, user, prefix);
       }
 
       if (formatOutput) {
@@ -343,15 +366,23 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
     PARAMS extends z.ZodType,
     BODY extends z.ZodType,
     OUT extends z.ZodType,
-    HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
+    PREFIX extends string = never,
+    HANDLER extends HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT, PREFIX> = HandlerBothFn<
+      METHOD,
+      USER,
+      PARAMS,
+      BODY,
+      OUT,
+      PREFIX
+    >,
   >(
-    routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
+    routeDef: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT, PREFIX>,
     handler: HANDLER,
     formatOutput?: FormatOutput<PARAMS, OUT, USER, Awaited<ReturnType<HANDLER>>>,
   ) => {
     return {
       ...routeDef,
-      handlerWrapped: wrapHandler<USER, PERMISSION, METHOD, PATH, PARAMS, BODY, OUT>(
+      handlerWrapped: wrapHandler<USER, PERMISSION, METHOD, PATH, PARAMS, BODY, OUT, PREFIX>(
         routeDef,
         handler,
         // Safe: Awaited<ReturnType<HANDLER>> is always a subtype of PromisableProperties<z.infer<OUT>>

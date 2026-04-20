@@ -74,25 +74,32 @@ Body methods (`.post()`, `.put()`, `.patch()`) take `bodyValidation` as the thir
 
 Path params are validated at definition time — every `:param` in the path must appear as a key in the params schema (if one is provided), or an error is thrown immediately.
 
-An optional `aliases?: string[]` argument (last argument for all builder methods) registers additional paths that resolve to the same handler. All aliases must use the **exact same set of param names** as the canonical `path` — this is enforced at definition time.
+An optional `prefixes?: readonly string[]` argument (last argument for all builder methods) registers additional paths of the form `/<prefix><canonicalPath>`. The router strips the prefix before param extraction and passes the matched prefix string as the last argument to the handler. No leading slash on prefix entries — enforced at definition time. Prefix entries must not contain `:param` segments.
 
 Example:
 ```ts
 const myRoute = defineRoute(
   def.get(
-    "/items/:itemId",
+    "/list/:listId",
     "user",
     outputSchema,
     undefined,
-    ["/legacy/items/:itemId", "/v1/items/:itemId"],   // aliases
+    ["hu", "de", "fr"],   // prefixes
   ),
-  async (params, user) => { ... },
+  async (params, user, prefix) => {
+    // prefix is "hu" | "de" | "fr" | undefined
+    // params.listId is correctly extracted from the rewritten URL
+  },
 );
 
-router.addRoute(myRoute); // registers all three paths
+router.addRoute(myRoute);
+// Registers: GET /list/:listId       → prefix = undefined
+//            GET /hu/list/:listId    → prefix = "hu"
+//            GET /de/list/:listId    → prefix = "de"
+//            GET /fr/list/:listId    → prefix = "fr"
 ```
 
-`path` remains the canonical path used for client-side URL generation. Aliases are server-only.
+`path` remains the canonical path used for client-side URL generation. Prefixed paths are server-only.
 
 #### Handler Wrapping — `RouteHandlerDefiner`
 
@@ -107,15 +114,16 @@ const defineRoute = RouteHandlerDefiner(
 
 export const myRoute = defineRoute(
   def.get("/items/:id", "user", outputSchema),
-  async (params, user) => {
+  async (params, user, prefix) => {
     // params is fully typed from the schema
+    // prefix is undefined when no prefixes are defined on the route
     return { ... };
   },
   formatOutput, // optional: (data, user, req, params) => FormatOutputReturn
 );
 ```
 
-For body routes, the handler receives `(params, body, user)`.
+For body routes, the handler receives `(params, body, user, prefix?)`.
 
 If `formatOutput` is omitted, the handler output is JSON-serialised and returned automatically.
 

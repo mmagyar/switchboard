@@ -138,23 +138,28 @@ def.options(path, permissionsNeeded, outputSchema, paramsSchema?)
 
 If no `paramsSchema` is provided, one is derived automatically from the path template (e.g. `/:id` → `{ id: z.number() }`).
 
-An optional `aliases` array (last argument for all builder methods) registers additional paths that resolve to the same handler. All aliases must use the **exact same set of param names** as the canonical `path` — this is enforced at definition time. `path` remains the canonical path used for client-side URL generation; aliases are server-only.
+An optional `prefixes` array (last argument for all builder methods) registers additional paths of the form `/<prefix><canonicalPath>`. The router strips the prefix before param extraction and passes the matched prefix string as the last argument to the handler. No leading slash on prefix entries — enforced at definition time. Prefix entries must not contain `:param` segments. `path` remains the canonical path used for client-side URL generation; prefixed paths are server-only.
 
 ```typescript
 const myRoute = handle(
   def.get(
-    "/items/:itemId",
+    "/list/:listId",
     "public",
     outputSchema,
     undefined,
-    ["/legacy/items/:itemId", "/v1/items/:itemId"],  // aliases
+    ["hu", "de", "fr"],  // prefixes
   ),
-  async ({ itemId }, user) => {
-    return { item: await db.findItem(itemId) };
+  async ({ listId }, user, prefix) => {
+    // prefix is "hu" | "de" | "fr" | undefined
+    return { item: await db.findItem(listId) };
   },
 );
 
-router.addRoute(myRoute); // registers all three paths
+router.addRoute(myRoute);
+// Registers: GET /list/:listId       → prefix = undefined
+//            GET /hu/list/:listId    → prefix = "hu"
+//            GET /de/list/:listId    → prefix = "de"
+//            GET /fr/list/:listId    → prefix = "fr"
 ```
 
 ---

@@ -204,6 +204,12 @@ describe("aliases", () => {
     ).toThrow(/different param names/i);
   });
 
+  test("throws when alias has invalid optional-param order (mandatory after optional)", () => {
+    expect(() =>
+      def.get("/items/:itemId", "admin", z.object({}), undefined, ["/items/:itemId?/:other"] as any),
+    ).toThrow(/optional/i);
+  });
+
   test("multiple valid aliases are all stored", () => {
     const route = def.get("/items/:itemId", "admin", z.object({}), undefined, [
       "/legacy/items/:itemId",

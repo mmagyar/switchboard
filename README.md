@@ -356,7 +356,7 @@ Path segments starting with `:` are extracted as route parameters. Segments endi
 
 Route lookup uses a **trie** (prefix tree) keyed by path segment. Each node in the trie represents one segment; the root's children are the first segments of all registered paths. Matching walks the trie one segment at a time, giving **O(segments)** lookup regardless of how many routes are registered.
 
-At each trie level, static segments are tried before parameter segments (`:param`), so `/users/settings` will always win over `/users/:id` when both are registered.
+At each trie level, static segments are tried before parameter segments (`:param`), so `/users/settings` will always win over `/users/:id` when both are registered. However, if a static node is matched at a segment but has no matching child for the next segment, the router **falls back** and retries that segment against the param (`:param`) child. This means `/users/me/posts` correctly matches `/users/:id/posts` with `id="me"` even when `/users/me` is also registered as a static route — the static match only wins outright when its subtree can satisfy the full remaining path.
 
 ### Why not Bun's built-in router?
 

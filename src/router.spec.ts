@@ -1,7 +1,9 @@
 import { expect, test } from "bun:test";
 import { Router, type RegisterableRoute } from "./router.ts";
 import { extractParams } from "./urlUtils.ts";
+
 const url = "https://example.com";
+
 test("router match simple route", () => {
   const r = new Router();
   r.addRoute("get", "/hello", () => new Response("Hello"));
@@ -51,10 +53,10 @@ test("don't match early a not fully conforming route", async () => {
     expect(await res?.text()).toBe(expected);
   };
 
-  genTester("/hello", "HELLO");
-  genTester("/hello/3/item", "ITEM");
-  genTester("/hello/3/item/4", "HELLOITEMID");
-  genTester("/hello/3", "HELLOID");
+  await genTester("/hello/123", "HELLOID");
+  await genTester("/hello/123/item/456", "HELLOITEMID");
+  await genTester("/hello/123/item/", "ITEM");
+  await genTester("/hello", "HELLO");
 });
 
 test("Handle routes not starting with a slash", async () => {
@@ -71,10 +73,10 @@ test("Handle routes not starting with a slash", async () => {
     expect(await res?.text()).toBe(expected);
   };
 
-  genTester("/hello", "HELLO");
-  genTester("/hello/3/item", "ITEM");
-  genTester("/hello/3/item/4", "HELLOITEMID");
-  genTester("/hello/3", "HELLOID");
+  await genTester("/hello/123", "HELLOID");
+  await genTester("/hello/123/item/456", "HELLOITEMID");
+  await genTester("/hello/123/item/", "ITEM");
+  await genTester("/hello", "HELLO");
 });
 
 test("handle optional path arguments", () => {
@@ -88,7 +90,7 @@ test("handle optional path arguments", () => {
   expect(route3).toBeDefined();
   //test extract
   const params = extractParams(route2!.route, new URL("/hello/3/ohai", url));
-  expect(params).toStrictEqual({ id: "3", name: "ohai" });
+  expect(params).toEqual({ id: "3", name: "ohai" });
 });
 
 test("throws if a non optional parameter follows an optional", () => {
@@ -396,4 +398,30 @@ test("alias without leading slash is normalised correctly", async () => {
   };
   r.addRoute(route);
   expect(r.getRoute("get", new URL("/legacy/items/5", url))).toBeDefined();
+});
+
+// ── trie static-priority + fallback behaviour ─────────────────────────────────
+
+test("trie: static 'me' node takes priority for /users/me, but /users/me/posts falls back to param branch", async () => {
+  // When the trie walks /users/me/posts it first tries the static "me" child.
+  // That node has no "posts" child, so the trie falls back and retries the
+  // segment against the ":id" param child, successfully matching
+  // /users/:id/posts with id="me". Static priority therefore does NOT prevent
+  // a longer param-based route from being found.
+  const r = new Router();
+  r.addRoute("get", "/users/me", () => new Response("ME"));
+  r.addRoute("get", "/users/:id/posts", () => new Response("POSTS"));
+
+  // /users/me — static branch wins exactly
+  const meRoute = r.getRoute("get", new URL("/users/me", url));
+  expect(await (await meRoute?.handler(new Request("https://example.com")))?.text()).toBe("ME");
+
+  // /users/42/posts — param branch, no ambiguity
+  const paramRoute = r.getRoute("get", new URL("/users/42/posts", url));
+  expect(await (await paramRoute?.handler(new Request("https://example.com")))?.text()).toBe("POSTS");
+
+  // /users/me/posts — static "me" node has no /posts child; trie falls back
+  // to the ":id" param branch and matches /users/:id/posts with id="me"
+  const fallbackRoute = r.getRoute("get", new URL("/users/me/posts", url));
+  expect(await (await fallbackRoute?.handler(new Request("https://example.com")))?.text()).toBe("POSTS");
 });

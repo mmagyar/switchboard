@@ -79,12 +79,17 @@ export const define = <PERMISSION>() => {
      * @param outputValidation
      * @param paramsValidation
      */
-    get: <PATH extends string, PARAMS extends MaybeZodType = undefined, OUT extends ZodType = never>(
+    get: <
+      PATH extends string,
+      PARAMS extends MaybeZodType = undefined,
+      OUT extends ZodType = never,
+      ALIASES extends string[] = never[],
+    >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: string[],
+      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"get", PATH, PERMISSION, PARAMS extends ZodType ? PARAMS : UrlParamsSchema<PATH>, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       if (aliases) {
@@ -106,12 +111,17 @@ export const define = <PERMISSION>() => {
       };
     },
 
-    del: <PATH extends string, PARAMS extends MaybeZodType = undefined, OUT extends ZodType = never>(
+    del: <
+      PATH extends string,
+      PARAMS extends MaybeZodType = undefined,
+      OUT extends ZodType = never,
+      ALIASES extends string[] = never[],
+    >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: string[],
+      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       if (aliases) {
@@ -129,12 +139,17 @@ export const define = <PERMISSION>() => {
         ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
-    options: <PATH extends string, PARAMS extends MaybeZodType = undefined, OUT extends ZodType = never>(
+    options: <
+      PATH extends string,
+      PARAMS extends MaybeZodType = undefined,
+      OUT extends ZodType = never,
+      ALIASES extends string[] = never[],
+    >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: string[],
+      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"options", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       if (aliases) {
@@ -157,13 +172,14 @@ export const define = <PERMISSION>() => {
       PARAMS extends MaybeZodType = undefined,
       BODY extends ZodType = never,
       OUT extends ZodType = never,
+      ALIASES extends string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: string[],
+      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"post", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       if (aliases) {
@@ -188,13 +204,14 @@ export const define = <PERMISSION>() => {
       PARAMS extends MaybeZodType = undefined,
       BODY extends ZodType = never,
       OUT extends ZodType = never,
+      ALIASES extends string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: string[],
+      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"put", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       if (aliases) {
@@ -219,13 +236,14 @@ export const define = <PERMISSION>() => {
       PARAMS extends MaybeZodType = undefined,
       BODY extends ZodType = never,
       OUT extends ZodType = never,
+      ALIASES extends string[] = never[],
     >(
       path: ValidateOptionalUrl<PATH>,
       permissionsNeeded: PERMISSION,
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
-      aliases?: string[],
+      aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"patch", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
       if (aliases) {

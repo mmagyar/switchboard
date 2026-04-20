@@ -130,6 +130,24 @@ function assertPathParamsInSchema(path: string, paramsValidation: ZodType): void
 }
 
 type MaybeUrl<PATH extends string, T extends MaybeZodType = undefined> = T extends ZodType ? T : UrlParamsSchema<PATH>;
+
+function validateParamsAndAliases(
+  path: string,
+  paramsValidation: ZodType | undefined,
+  aliases: string[] | undefined,
+): void {
+  if (paramsValidation) {
+    assertPathParamsInSchema(path, paramsValidation);
+    assertNoAmbiguousUnions(paramsValidation);
+  }
+  if (aliases) {
+    for (const alias of aliases) {
+      if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
+      assertAliasParamNamesMatch(path, alias);
+    }
+  }
+}
+
 export const define = <PERMISSION>() => {
   return {
     /**
@@ -149,25 +167,14 @@ export const define = <PERMISSION>() => {
       outputValidation: OUT,
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
-    ): RouteWithoutBody<"get", PATH, PERMISSION, PARAMS extends ZodType ? PARAMS : UrlParamsSchema<PATH>, OUT> => {
-      if (paramsValidation) {
-        assertPathParamsInSchema(path, paramsValidation);
-        assertNoAmbiguousUnions(paramsValidation);
-      }
-      if (aliases) {
-        for (const alias of aliases) {
-          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
-          assertAliasParamNamesMatch(path, alias);
-        }
-      }
+    ): RouteWithoutBody<"get", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
+      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
       return {
         method: "get",
         path,
         permissionsNeeded,
         //Can't really get the compiler to realize the correct type without casting
-        paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as PARAMS extends ZodType
-          ? PARAMS
-          : UrlParamsSchema<PATH>,
+        paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         outputValidation,
         ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
@@ -185,16 +192,7 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
-      if (paramsValidation) {
-        assertPathParamsInSchema(path, paramsValidation);
-        assertNoAmbiguousUnions(paramsValidation);
-      }
-      if (aliases) {
-        for (const alias of aliases) {
-          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
-          assertAliasParamNamesMatch(path, alias);
-        }
-      }
+      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
       return {
         method: "delete",
         path,
@@ -204,6 +202,7 @@ export const define = <PERMISSION>() => {
         ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
+
     options: <
       PATH extends string,
       PARAMS extends MaybeZodType = undefined,
@@ -216,16 +215,7 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithoutBody<"options", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
-      if (paramsValidation) {
-        assertPathParamsInSchema(path, paramsValidation);
-        assertNoAmbiguousUnions(paramsValidation);
-      }
-      if (aliases) {
-        for (const alias of aliases) {
-          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
-          assertAliasParamNamesMatch(path, alias);
-        }
-      }
+      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
       return {
         method: "options",
         path,
@@ -235,6 +225,7 @@ export const define = <PERMISSION>() => {
         ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
+
     post: <
       PATH extends string,
       PARAMS extends MaybeZodType = undefined,
@@ -249,16 +240,7 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"post", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      if (paramsValidation) {
-        assertPathParamsInSchema(path, paramsValidation);
-        assertNoAmbiguousUnions(paramsValidation);
-      }
-      if (aliases) {
-        for (const alias of aliases) {
-          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
-          assertAliasParamNamesMatch(path, alias);
-        }
-      }
+      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
       return {
         method: "post",
         path,
@@ -284,16 +266,7 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"put", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      if (paramsValidation) {
-        assertPathParamsInSchema(path, paramsValidation);
-        assertNoAmbiguousUnions(paramsValidation);
-      }
-      if (aliases) {
-        for (const alias of aliases) {
-          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
-          assertAliasParamNamesMatch(path, alias);
-        }
-      }
+      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
       return {
         method: "put",
         path,
@@ -319,16 +292,7 @@ export const define = <PERMISSION>() => {
       paramsValidation?: PARAMS,
       aliases?: { [K in keyof ALIASES]: ValidateOptionalUrl<ALIASES[K]> },
     ): RouteWithBody<"patch", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
-      if (paramsValidation) {
-        assertPathParamsInSchema(path, paramsValidation);
-        assertNoAmbiguousUnions(paramsValidation);
-      }
-      if (aliases) {
-        for (const alias of aliases) {
-          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
-          assertAliasParamNamesMatch(path, alias);
-        }
-      }
+      validateParamsAndAliases(path, paramsValidation, aliases as string[] | undefined);
       return {
         method: "patch",
         path,

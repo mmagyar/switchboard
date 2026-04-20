@@ -773,6 +773,28 @@ describe("RouteHandler", () => {
         expect(res.status).toBe(410);
         expect(await res.text()).toContain("gone, overridden by parser");
       });
+
+      test("errorParser overrides built-in Unauthorized handler when it returns a value", async () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+          {
+            errorLogger: () => {},
+            errorParser: async (error) => {
+              if (error instanceof Unauthorized) {
+                return { status: 418, message: "unauthorized, overridden by parser" };
+              }
+              return undefined;
+            },
+          },
+        );
+        const route = handle(def.get("/:id", "", z.object({})), () => {
+          throw new Unauthorized(401);
+        });
+        const res = await route.handlerWrapped(new Request("https://example.com/1"));
+        expect(res.status).toBe(418);
+        expect(await res.text()).toContain("unauthorized, overridden by parser");
+      });
     });
 
     describe("errorHtmlFormatter", () => {

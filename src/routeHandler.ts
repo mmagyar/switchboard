@@ -162,11 +162,14 @@ export const wrapHandler = <
     req: Request,
   ) => Promise<"ok" | "forbidden" | "unauthenticated">,
   getUserFromRequest: (req: Request) => Promise<USER>,
-  outputErrorWarning?: (error: ZodError<unknown>, data: unknown, method: string, url: string) => void,
-  errorParser?: (error: unknown) => Promise<{ status: number; message: string } | undefined>,
-  errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>,
-  errorLogger: (...args: unknown[]) => void = console.error,
+  options?: {
+    outputErrorWarning?: (error: ZodError<unknown>, data: unknown, method: string, url: string) => void;
+    errorParser?: (error: unknown) => Promise<{ status: number; message: string } | undefined>;
+    errorHtmlFormatter?: (status: number, message: string, request: Request, user?: USER) => Promise<string>;
+    errorLogger?: (...args: unknown[]) => void;
+  },
 ): ReqRes => {
+  const { outputErrorWarning, errorParser, errorHtmlFormatter, errorLogger = console.error } = options ?? {};
   const { path, permissionsNeeded, paramsValidation, outputValidation, method } = def;
 
   const validatePerProperty = (obj: unknown, reqUrl: string) => {
@@ -355,10 +358,7 @@ export const RouteHandlerDefiner = <USER, PERMISSION>(
         formatOutput as FormatOutput<PARAMS, OUT, USER> | undefined,
         authorizer,
         getUserFromRequest,
-        options?.outputErrorWarning,
-        options?.errorParser,
-        options?.errorHtmlFormatter,
-        options?.errorLogger,
+        options,
       ),
     };
   };

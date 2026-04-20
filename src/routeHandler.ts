@@ -216,32 +216,37 @@ export const wrapHandler = <
       const hasBody = method === "post" || method === "put" || method === "patch";
       if (hasBody) {
         const contentType = req.headers.get("content-type");
-        let data: Record<string, unknown> = {};
+        let data: Record<string, unknown> | undefined;
         if (contentType?.includes("form")) {
+          const formParsed: Record<string, unknown> = {};
           const formData = await req.formData();
           formData.forEach((value, key) => {
-            if (!Reflect.has(data, key)) {
-              data[key] = value;
+            if (!Reflect.has(formParsed, key)) {
+              formParsed[key] = value;
               return;
             }
-            const existing = data[key];
-            data[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
+            const existing = formParsed[key];
+            formParsed[key] = Array.isArray(existing) ? [...existing, value] : [existing, value];
           });
           // Form data does not have data types, everything is a string,
           // so we convert data that could be a number to a number type before passing it to zod parse
-          const numConversions = parseNumberFromForm(def.bodyValidation, data);
+          const numConversions = parseNumberFromForm(def.bodyValidation, formParsed);
           if (numConversions !== null && typeof numConversions === "object" && !Array.isArray(numConversions)) {
-            forEach(numConversions, (value, key) => (data[key] = value));
+            forEach(numConversions, (value, key) => (formParsed[key] = value));
           }
-          const boolConversions = parseBooleanFromForm(def.bodyValidation, data);
+          const boolConversions = parseBooleanFromForm(def.bodyValidation, formParsed);
           if (boolConversions !== null && typeof boolConversions === "object" && !Array.isArray(boolConversions)) {
-            forEach(boolConversions, (value, key) => (data[key] = value));
+            forEach(boolConversions, (value, key) => (formParsed[key] = value));
           }
+          data = formParsed;
         } else if (contentType === null || contentType.includes("json")) {
-          try {
-            data = (await req.json()) as Record<string, unknown>;
-          } catch {
-            return new Response("Body is not valid JSON", { status: 400 });
+          const bodyText = await req.text();
+          if (bodyText.trim() !== "") {
+            try {
+              data = JSON.parse(bodyText) as Record<string, unknown>;
+            } catch {
+              return new Response("Body is not valid JSON", { status: 400 });
+            }
           }
         } else {
           return new Response(`Unsupported content type: ${contentType}`, { status: 415 });

@@ -31,7 +31,8 @@ const genCert = async (domain: string = "localhost") => {
       ],
     });
     outstring = caSpawn.stdout.toString();
-    Bun.write(filePath, outstring);
+    await Bun.write(filePath, outstring);
+    await Bun.$`chmod 600 ${filePath}`;
   }
   const parts = outstring.split(/(?=-----BEGIN CERTIFICATE-----)/);
   return {
@@ -41,17 +42,6 @@ const genCert = async (domain: string = "localhost") => {
 };
 
 const accessLogDefault = (time: number, req: Request, res?: Response) => {
-  const url = new URL(req.url);
-  // Do not log requests to resources in public folder
-  if (url.pathname.startsWith("/public")) {
-    return;
-  }
-
-  // Do not log app.log requests, as that would just spam the logs
-  if (url.pathname.startsWith("/app.log")) {
-    return;
-  }
-
   console.info(
     `${req.method} ${req.url} ${res?.status ?? null} ${res?.headers.get("content-type") || "no body"} ${Math.round(time * 1000) / 1000}ms`,
   );
@@ -70,7 +60,7 @@ export const serveHotBuns = async (
   readLogs?: () => Promise<string>,
   watchLogs?: (onChange: () => void) => void,
 ): Promise<() => void> => {
-  let wsc: ServerWebSocket<unknown>[] = [];
+  let wsc = new Set<ServerWebSocket<unknown>>();
   const sendReload = () => {
     wsc.forEach((x) => x.send("RELOAD"));
   };
@@ -142,11 +132,10 @@ export const serveHotBuns = async (
         if (readLogs) ws.send(await readLogs());
       }, // a message is received
       open(ws) {
-        wsc.push(ws);
+        wsc.add(ws);
       }, // a socket is opened
       close(ws, _code, _message) {
-        //remove ws from wsc
-        wsc = wsc.filter((w) => w !== ws);
+        wsc.delete(ws);
       }, // a socket is closed
       drain(_ws) {}, // the socket is ready to receive more data
     },

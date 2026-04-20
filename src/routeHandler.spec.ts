@@ -646,6 +646,30 @@ describe("RouteHandler", () => {
       expect(res.status).toBe(415);
     });
 
+    test("POST with no Content-Type and empty body passes when schema is nullish", async () => {
+      const routeNullish = handle(
+        def.post(
+          "/item-nullish",
+          "",
+          z.object({ name: z.string(), age: z.number() }).nullish(),
+          z.object({}).nullish(),
+        ),
+        () => null,
+      );
+      const res = await routeNullish.handlerWrapped(
+        new Request("https://example.com/item-nullish", { method: "POST" }),
+      );
+      expect(res.status).toBe(201);
+    });
+
+    test("POST with no Content-Type and empty body returns 400 when schema requires an object", async () => {
+      const res = await route.handlerWrapped(new Request("https://example.com/item", { method: "POST" }));
+      expect(res.status).toBe(400);
+      const text = await res.text();
+      expect(text).not.toBe("Body is not valid JSON");
+      expect(text).toContain("Body does not match defined schema");
+    });
+
     test("POST with form data coerces numbers and returns 201", async () => {
       const formData = new FormData();
       formData.append("name", "Joe");

@@ -39,6 +39,18 @@ export type Route<
     : never;
 type MaybeZodType = ZodType | undefined;
 
+function assertAliasParamNamesMatch(canonicalPath: string, alias: string): void {
+  const canonicalParams = extractParamNames(canonicalPath as Parameters<typeof extractParamNames>[0]).sort();
+  const aliasParams = extractParamNames(alias as Parameters<typeof extractParamNames>[0]).sort();
+  const sameLength = canonicalParams.length === aliasParams.length;
+  const sameNames = sameLength && canonicalParams.every((p, i) => p === aliasParams[i]);
+  if (!sameNames) {
+    throw new Error(
+      `Route alias "${alias}" has different param names than canonical path "${canonicalPath}". Canonical params: [${canonicalParams.join(", ")}], alias params: [${aliasParams.join(", ")}]`,
+    );
+  }
+}
+
 function assertPathParamsInSchema(path: string, paramsValidation: ZodType): void {
   const pathParams = extractParamNames(path as Parameters<typeof extractParamNames>[0]);
   if (pathParams.length === 0) return;
@@ -72,8 +84,15 @@ export const define = <PERMISSION>() => {
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
+      aliases?: string[],
     ): RouteWithoutBody<"get", PATH, PERMISSION, PARAMS extends ZodType ? PARAMS : UrlParamsSchema<PATH>, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (aliases) {
+        for (const alias of aliases) {
+          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
+          assertAliasParamNamesMatch(path, alias);
+        }
+      }
       return {
         method: "get",
         path,
@@ -83,6 +102,7 @@ export const define = <PERMISSION>() => {
           ? PARAMS
           : UrlParamsSchema<PATH>,
         outputValidation,
+        ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
 
@@ -91,14 +111,22 @@ export const define = <PERMISSION>() => {
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
+      aliases?: string[],
     ): RouteWithoutBody<"delete", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (aliases) {
+        for (const alias of aliases) {
+          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
+          assertAliasParamNamesMatch(path, alias);
+        }
+      }
       return {
         method: "delete",
         path,
         permissionsNeeded,
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         outputValidation,
+        ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
     options: <PATH extends string, PARAMS extends MaybeZodType = undefined, OUT extends ZodType = never>(
@@ -106,14 +134,22 @@ export const define = <PERMISSION>() => {
       permissionsNeeded: PERMISSION,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
+      aliases?: string[],
     ): RouteWithoutBody<"options", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (aliases) {
+        for (const alias of aliases) {
+          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
+          assertAliasParamNamesMatch(path, alias);
+        }
+      }
       return {
         method: "options",
         path,
         permissionsNeeded,
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         outputValidation,
+        ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
     post: <
@@ -127,8 +163,15 @@ export const define = <PERMISSION>() => {
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
+      aliases?: string[],
     ): RouteWithBody<"post", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (aliases) {
+        for (const alias of aliases) {
+          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
+          assertAliasParamNamesMatch(path, alias);
+        }
+      }
       return {
         method: "post",
         path,
@@ -136,6 +179,7 @@ export const define = <PERMISSION>() => {
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         bodyValidation,
         outputValidation,
+        ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
 
@@ -150,8 +194,15 @@ export const define = <PERMISSION>() => {
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
+      aliases?: string[],
     ): RouteWithBody<"put", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (aliases) {
+        for (const alias of aliases) {
+          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
+          assertAliasParamNamesMatch(path, alias);
+        }
+      }
       return {
         method: "put",
         path,
@@ -159,6 +210,7 @@ export const define = <PERMISSION>() => {
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         bodyValidation,
         outputValidation,
+        ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
 
@@ -173,8 +225,15 @@ export const define = <PERMISSION>() => {
       bodyValidation: BODY,
       outputValidation: OUT,
       paramsValidation?: PARAMS,
+      aliases?: string[],
     ): RouteWithBody<"patch", PATH, PERMISSION, MaybeUrl<PATH, PARAMS>, BODY, OUT> => {
       if (paramsValidation) assertPathParamsInSchema(path, paramsValidation);
+      if (aliases) {
+        for (const alias of aliases) {
+          if (paramsValidation) assertPathParamsInSchema(alias, paramsValidation);
+          assertAliasParamNamesMatch(path, alias);
+        }
+      }
       return {
         method: "patch",
         path,
@@ -182,6 +241,7 @@ export const define = <PERMISSION>() => {
         paramsValidation: (paramsValidation ?? urlToZodSchema(path)) as MaybeUrl<PATH, PARAMS>,
         bodyValidation,
         outputValidation,
+        ...(aliases && aliases.length > 0 ? { aliases } : {}),
       };
     },
   };

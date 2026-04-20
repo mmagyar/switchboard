@@ -149,3 +149,66 @@ test("if a part ends with _id it will be parsed as number", () => {
   expect(withCamelCase.shape.meId.isOptional()).toBe(true);
   expect(withCamelCase.shape.them).toBeInstanceOf(ZodOptional);
 });
+
+describe("aliases", () => {
+  test("no error when aliases use the same param names as canonical path", () => {
+    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items/:itemId"])).not.toThrow();
+  });
+
+  test("returned route object carries the aliases array", () => {
+    const route = def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items/:itemId"]);
+    expect(route.aliases).toEqual(["/legacy/items/:itemId"]);
+  });
+
+  test("aliases key is omitted when no aliases are provided", () => {
+    const route = def.get("/items/:itemId", "admin", z.object({}));
+    expect(route.aliases).toBeUndefined();
+  });
+
+  test("aliases key is omitted when empty array is provided", () => {
+    const route = def.get("/items/:itemId", "admin", z.object({}), undefined, []);
+    expect(route.aliases).toBeUndefined();
+  });
+
+  test("throws when alias has different param names than canonical path", () => {
+    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items/:legacyId"])).toThrow(
+      /different param names/i,
+    );
+  });
+
+  test("throws when alias is missing a param that canonical path has", () => {
+    expect(() => def.get("/items/:itemId", "admin", z.object({}), undefined, ["/legacy/items"])).toThrow(
+      /different param names/i,
+    );
+  });
+
+  test("throws when alias param is missing from explicit paramsValidation schema", () => {
+    const schema = z.object({ itemId: z.number() });
+    // alias uses same param names so assertAliasParamNamesMatch passes,
+    // but assertPathParamsInSchema for the alias against the schema should also pass
+    expect(() => def.get("/items/:itemId", "admin", z.object({}), schema, ["/v2/items/:itemId"])).not.toThrow();
+  });
+
+  test("post builder accepts aliases", () => {
+    const route = def.post("/items/:itemId", "admin", z.object({ name: z.string() }), z.object({}), undefined, [
+      "/legacy/items/:itemId",
+    ]);
+    expect(route.aliases).toEqual(["/legacy/items/:itemId"]);
+  });
+
+  test("post builder throws when alias has mismatched params", () => {
+    expect(() =>
+      def.post("/items/:itemId", "admin", z.object({ name: z.string() }), z.object({}), undefined, [
+        "/legacy/items/:otherId",
+      ]),
+    ).toThrow(/different param names/i);
+  });
+
+  test("multiple valid aliases are all stored", () => {
+    const route = def.get("/items/:itemId", "admin", z.object({}), undefined, [
+      "/legacy/items/:itemId",
+      "/v1/items/:itemId",
+    ]);
+    expect(route.aliases).toEqual(["/legacy/items/:itemId", "/v1/items/:itemId"]);
+  });
+});

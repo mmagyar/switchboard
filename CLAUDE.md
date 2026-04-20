@@ -74,18 +74,38 @@ Body methods (`.post()`, `.put()`, `.patch()`) take `bodyValidation` as the thir
 
 Path params are validated at definition time — every `:param` in the path must appear as a key in the params schema (if one is provided), or an error is thrown immediately.
 
+An optional `aliases?: string[]` argument (last argument for all builder methods) registers additional paths that resolve to the same handler. All aliases must use the **exact same set of param names** as the canonical `path` — this is enforced at definition time.
+
+Example:
+```ts
+const myRoute = defineRoute(
+  def.get(
+    "/items/:itemId",
+    "user",
+    outputSchema,
+    undefined,
+    ["/legacy/items/:itemId", "/v1/items/:itemId"],   // aliases
+  ),
+  async (params, user) => { ... },
+);
+
+router.addRoute(myRoute); // registers all three paths
+```
+
+`path` remains the canonical path used for client-side URL generation. Aliases are server-only.
+
 #### Handler Wrapping — `RouteHandlerDefiner`
 
 `RouteHandlerDefiner` is instantiated once with your auth logic and returns the `define`-style handler function:
 
 ```ts
-const rhd = RouteHandlerDefiner(
+const defineRoute = RouteHandlerDefiner(
   async (user, permissionsNeeded, req) => { /* return "ok" | "forbidden" | "unauthenticated" */ },
   async (req) => { /* return USER from request */ },
   { outputErrorWarning, errorParser, errorHtmlFormatter, errorLogger }, // optional
 );
 
-export const myRoute = rhd(
+export const myRoute = defineRoute(
   def.get("/items/:id", "user", outputSchema),
   async (params, user) => {
     // params is fully typed from the schema

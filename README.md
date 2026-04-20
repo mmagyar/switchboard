@@ -138,6 +138,25 @@ def.options(path, permissionsNeeded, outputSchema, paramsSchema?)
 
 If no `paramsSchema` is provided, one is derived automatically from the path template (e.g. `/:id` → `{ id: z.number() }`).
 
+An optional `aliases` array (last argument for all builder methods) registers additional paths that resolve to the same handler. All aliases must use the **exact same set of param names** as the canonical `path` — this is enforced at definition time. `path` remains the canonical path used for client-side URL generation; aliases are server-only.
+
+```typescript
+const myRoute = handle(
+  def.get(
+    "/items/:itemId",
+    "public",
+    outputSchema,
+    undefined,
+    ["/legacy/items/:itemId", "/v1/items/:itemId"],  // aliases
+  ),
+  async ({ itemId }, user) => {
+    return { item: await db.findItem(itemId) };
+  },
+);
+
+router.addRoute(myRoute); // registers all three paths
+```
+
 ---
 
 ### `RouteHandlerDefiner<USER, PERMISSION>(authorizer, getUserFromRequest, options?)`

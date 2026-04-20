@@ -22,6 +22,7 @@ type TrieNode = {
 export type RegisterableRoute = {
   method: HTTPMethods;
   path: string;
+  aliases?: string[];
   handlerWrapped: (req: Request) => Promise<Response> | Response;
 };
 
@@ -108,7 +109,11 @@ export class Router {
   ) {}
 
   addRoute(route: RegisterableRoute): void;
-  addRoute<T extends string>(method: HTTPMethods, route: ValidateOptionalUrl<T>, handler: (req: Request) => Promise<Response> | Response): void;
+  addRoute<T extends string>(
+    method: HTTPMethods,
+    route: ValidateOptionalUrl<T>,
+    handler: (req: Request) => Promise<Response> | Response,
+  ): void;
   addRoute<T extends string>(
     routeOrMethod: RegisterableRoute | HTTPMethods,
     path?: ValidateOptionalUrl<T>,
@@ -137,6 +142,19 @@ export class Router {
     }
     this.registeredRoutes.add(key);
     trieInsert(this.root, method, normalized, resolvedHandler);
+
+    if (typeof routeOrMethod === "object" && routeOrMethod.aliases) {
+      for (const alias of routeOrMethod.aliases) {
+        const normalizedAlias = alias.startsWith("/") ? alias : `/${alias}`;
+        checkRouteOptionalParameterOrder(normalizedAlias as ValidateOptionalUrl<string>);
+        const aliasKey = `${method}:${normalizedAlias}`;
+        if (this.registeredRoutes.has(aliasKey)) {
+          throw new Error(`Duplicate route: ${method.toUpperCase()} ${normalizedAlias}`);
+        }
+        this.registeredRoutes.add(aliasKey);
+        trieInsert(this.root, method, normalizedAlias, resolvedHandler);
+      }
+    }
   }
 
   getRoute(method: HTTPMethods, path: URL): StoredRoute | undefined {

@@ -4,6 +4,7 @@ import type { HTTPMethods, HTTPMethodsWithBody, HTTPMethodsWithoutBody } from ".
 export interface RouteBase<PATH extends string, PERMISSION, PARAMS extends ZodType, OUT extends ZodType> {
   method: HTTPMethods;
   path: PATH;
+  aliases?: string[];
   permissionsNeeded: PERMISSION;
   paramsValidation: PARAMS;
   bodyValidation?: undefined;

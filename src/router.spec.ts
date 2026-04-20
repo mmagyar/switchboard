@@ -328,3 +328,72 @@ test("addRoute route-object normalises paths without leading slash", async () =>
   const found = r.getRoute("get", new URL("/no-slash", url));
   expect(found).toBeDefined();
 });
+
+// ── aliases ───────────────────────────────────────────────────────────────────
+
+test("addRoute registers all aliases from a RegisterableRoute", async () => {
+  const r = new Router();
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/items/:itemId",
+    aliases: ["/legacy/items/:itemId", "/v1/items/:itemId"],
+    handlerWrapped: () => new Response("item"),
+  };
+  r.addRoute(route);
+
+  expect(r.getRoute("get", new URL("/items/42", url))).toBeDefined();
+  expect(r.getRoute("get", new URL("/legacy/items/42", url))).toBeDefined();
+  expect(r.getRoute("get", new URL("/v1/items/42", url))).toBeDefined();
+});
+
+test("alias routes dispatch to the same handler as the canonical path", async () => {
+  const r = new Router();
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/items/:itemId",
+    aliases: ["/legacy/items/:itemId"],
+    handlerWrapped: () => new Response("shared-handler"),
+  };
+  r.addRoute(route);
+
+  const canonical = r.getRoute("get", new URL("/items/1", url));
+  const alias = r.getRoute("get", new URL("/legacy/items/1", url));
+  expect(canonical!.handler).toBe(alias!.handler);
+  expect(await (await canonical!.handler(new Request("https://example.com")))?.text()).toBe("shared-handler");
+  expect(await (await alias!.handler(new Request("https://example.com")))?.text()).toBe("shared-handler");
+});
+
+test("throws when alias duplicates an already-registered path", () => {
+  const r = new Router();
+  r.addRoute("get", "/legacy/items/:itemId", () => new Response("existing"));
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/items/:itemId",
+    aliases: ["/legacy/items/:itemId"],
+    handlerWrapped: () => new Response("new"),
+  };
+  expect(() => r.addRoute(route)).toThrow(/duplicate route/i);
+});
+
+test("throws when alias duplicates the canonical path of the same route", () => {
+  const r = new Router();
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/items/:itemId",
+    aliases: ["/items/:itemId"],
+    handlerWrapped: () => new Response("dup"),
+  };
+  expect(() => r.addRoute(route)).toThrow(/duplicate route/i);
+});
+
+test("alias without leading slash is normalised correctly", async () => {
+  const r = new Router();
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/items/:itemId",
+    aliases: ["legacy/items/:itemId"],
+    handlerWrapped: () => new Response("ok"),
+  };
+  r.addRoute(route);
+  expect(r.getRoute("get", new URL("/legacy/items/5", url))).toBeDefined();
+});

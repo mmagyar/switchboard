@@ -19,6 +19,11 @@ type TrieNode = {
   paramChild: ParamEdge | null;
   handlers: Map<string, StoredRoute>;
 };
+export type RegisterableRoute = {
+  method: HTTPMethods;
+  path: string;
+  handlerWrapped: (req: Request) => Promise<Response> | Response;
+};
 
 const makeNode = (): TrieNode => ({
   staticChildren: new Map(),
@@ -102,19 +107,36 @@ export class Router {
       new Response("Not found - Route not defined", { status: 404 }),
   ) {}
 
+  addRoute(route: RegisterableRoute): void;
+  addRoute<T extends string>(method: HTTPMethods, route: ValidateOptionalUrl<T>, handler: (req: Request) => Promise<Response> | Response): void;
   addRoute<T extends string>(
-    method: HTTPMethods,
-    route: ValidateOptionalUrl<T>,
-    handler: (req: Request) => Promise<Response> | Response,
-  ) {
-    checkRouteOptionalParameterOrder(route);
-    const normalized = route.startsWith("/") ? route : `/${route}`;
+    routeOrMethod: RegisterableRoute | HTTPMethods,
+    path?: ValidateOptionalUrl<T>,
+    handler?: (req: Request) => Promise<Response> | Response,
+  ): void {
+    let method: HTTPMethods;
+    let normalized: string;
+    let resolvedHandler: (req: Request) => Promise<Response> | Response;
+
+    if (typeof routeOrMethod === "object") {
+      method = routeOrMethod.method;
+      resolvedHandler = routeOrMethod.handlerWrapped;
+      normalized = routeOrMethod.path.startsWith("/") ? routeOrMethod.path : `/${routeOrMethod.path}`;
+      checkRouteOptionalParameterOrder(normalized as ValidateOptionalUrl<string>);
+    } else {
+      method = routeOrMethod;
+      const rawPath = path!;
+      checkRouteOptionalParameterOrder(rawPath);
+      normalized = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
+      resolvedHandler = handler!;
+    }
+
     const key = `${method}:${normalized}`;
     if (this.registeredRoutes.has(key)) {
       throw new Error(`Duplicate route: ${method.toUpperCase()} ${normalized}`);
     }
     this.registeredRoutes.add(key);
-    trieInsert(this.root, method, normalized, handler);
+    trieInsert(this.root, method, normalized, resolvedHandler);
   }
 
   getRoute(method: HTTPMethods, path: URL): StoredRoute | undefined {

@@ -96,7 +96,11 @@ export const createHandler = handle(createRoute, async (_params, body, user) => 
 const routes = [listHandler, createHandler];
 
 const router = new Router();
-routes.forEach((r) => router.addRoute(r.method, r.path, r.handlerWrapped));
+// Pass the route object directly — method and path are already encoded in it.
+// Do NOT call router.addRoute(r.method, r.path, r.handlerWrapped); that
+// duplicates information that lives in the route definition and breaks the
+// single-source-of-truth guarantee.
+routes.forEach((r) => router.addRoute(r));
 
 // Full-featured Bun server with optional HTTPS and hot reload
 await serveHotBuns(

@@ -104,8 +104,11 @@ If `formatOutput` is omitted, the handler output is JSON-serialised and returned
 ```ts
 const router = new Router(defaultHandler); // defaultHandler is optional (404 fallback)
 
-// Register — method and path come from the route object; do not duplicate them
-routes.forEach(r => router.addRoute(r.method, r.path, r.handlerWrapped));
+// Register using the route object directly — method and path come from the route; no duplication
+routes.forEach(r => router.addRoute(r));
+
+// Alternatively, pass method, path, and handler explicitly
+router.addRoute("get", "/items/:id", myHandler);
 
 // Dispatch
 const response = await router.handleRequest(req);
@@ -152,8 +155,8 @@ The library has two entry points defined in `package.json`:
 
 Throw any of these from a handler — `wrapHandler` catches them and returns the correct HTTP response.
 
-## Single Source of Truth
+#### Single Source of Truth
 
-- Route method and path live in the `def.*` call — do not repeat them in `router.addRoute`.
+- Route method and path live in the `def.*` call — pass the route object directly to `router.addRoute(r)` and do not repeat them.
 - The output Zod schema is the single source for the handler's return type — do not write a separate TypeScript interface that duplicates it.
 - Tests live alongside source as `*.spec.ts` files — do not create a separate `tests/` directory.

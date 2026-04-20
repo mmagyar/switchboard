@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { Router } from "./router.ts";
+import { Router, type RegisterableRoute } from "./router.ts";
 import { extractParams } from "./urlUtils.ts";
 const url = "https://example.com";
 test("router match simple route", () => {
@@ -296,4 +296,35 @@ test("does not throw when the same param name is reused at the same position in 
   const r = new Router();
   r.addRoute("get", "/users/:id/posts", () => new Response("posts"));
   expect(() => r.addRoute("get", "/users/:id/comments", () => new Response("comments"))).not.toThrow();
+});
+
+test("addRoute accepts a RegisterableRoute object", async () => {
+  const r = new Router();
+  const route: RegisterableRoute = {
+    method: "get",
+    path: "/items/:id",
+    handlerWrapped: () => new Response("item"),
+  };
+  r.addRoute(route);
+  const found = r.getRoute("get", new URL("/items/42", url));
+  expect(found).toBeDefined();
+  expect(await (await found!.handler(new Request("https://example.com")))?.text()).toBe("item");
+});
+
+test("addRoute route-object overload throws on duplicate registration", () => {
+  const r = new Router();
+  const route: RegisterableRoute = {
+    method: "post",
+    path: "/orders",
+    handlerWrapped: () => new Response("order"),
+  };
+  r.addRoute(route);
+  expect(() => r.addRoute(route)).toThrow(/duplicate route/i);
+});
+
+test("addRoute route-object normalises paths without leading slash", async () => {
+  const r = new Router();
+  r.addRoute({ method: "get", path: "no-slash", handlerWrapped: () => new Response("ok") });
+  const found = r.getRoute("get", new URL("/no-slash", url));
+  expect(found).toBeDefined();
 });

@@ -32,7 +32,7 @@ export {
   type PromisableProperties,
 } from "./routeHandler.ts";
 
-export { Router } from "./router.ts";
+export { Router, type RegisterableRoute } from "./router.ts";
 
 export { type RouteBase, type RouteWithBody, type RouteWithoutBody } from "./routeBaseType.ts";
 

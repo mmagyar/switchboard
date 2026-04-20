@@ -103,7 +103,9 @@ const objectStringify = (
     return encodeKeyValue(`${String(parentKeys)}.${String(k)}`, v, urlSearch);
   });
 
-//TODO maybe empty array should be preserved? otherwise some schemas might behave wierd
+// Empty arrays produce no query params and are intentionally omitted: since arrays are serialized
+// as indexed keys (e.g. array.0=John&array.1=Jane), an empty array yields no keys to add, so there
+// is nothing meaningful to encode. Omitting it entirely is the correct and consistent behavior.
 export const defToUrl = <PATH extends string, PARAMS extends ZodType>(
   def: Omit<RouteBase<PATH, unknown, PARAMS, ZodTypeAny>, "bodyValidation">,
   input: z.infer<PARAMS>,

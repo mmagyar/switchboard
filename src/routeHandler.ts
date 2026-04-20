@@ -153,7 +153,7 @@ export const wrapHandler = <
   BODY extends z.ZodType,
   OUT extends z.ZodType,
 >(
-  def: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
+  route: Route<METHOD, PATH, PERMISSION, PARAMS, BODY, OUT>,
   handler: HandlerBothFn<METHOD, USER, PARAMS, BODY, OUT>,
   formatOutput: FormatOutput<PARAMS, OUT, USER> | undefined,
   authorizer: (
@@ -170,7 +170,7 @@ export const wrapHandler = <
   },
 ): ReqRes => {
   const { outputErrorWarning, errorParser, errorHtmlFormatter, errorLogger = console.error } = options ?? {};
-  const { path, permissionsNeeded, paramsValidation, outputValidation, method } = def;
+  const { path, permissionsNeeded, paramsValidation, outputValidation, method } = route;
 
   const validatePerProperty = (obj: unknown, reqUrl: string) => {
     if (obj === null || typeof obj !== "object") return;
@@ -233,11 +233,11 @@ export const wrapHandler = <
           });
           // Form data does not have data types, everything is a string,
           // so we convert data that could be a number to a number type before passing it to zod parse
-          const numConversions = parseNumberFromForm(def.bodyValidation, formParsed);
+          const numConversions = parseNumberFromForm(route.bodyValidation, formParsed);
           if (numConversions !== null && typeof numConversions === "object" && !Array.isArray(numConversions)) {
             forEach(numConversions, (value, key) => (formParsed[key] = value));
           }
-          const boolConversions = parseBooleanFromForm(def.bodyValidation, formParsed);
+          const boolConversions = parseBooleanFromForm(route.bodyValidation, formParsed);
           if (boolConversions !== null && typeof boolConversions === "object" && !Array.isArray(boolConversions)) {
             forEach(boolConversions, (value, key) => (formParsed[key] = value));
           }
@@ -254,7 +254,7 @@ export const wrapHandler = <
         } else {
           return new Response(`Unsupported content type: ${contentType}`, { status: 415 });
         }
-        const body = def.bodyValidation.safeParse(data);
+        const body = route.bodyValidation.safeParse(data);
         if (!body.success) {
           return er("Body does not match defined schema: " + body.error.message, 400);
         }

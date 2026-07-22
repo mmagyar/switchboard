@@ -19,7 +19,7 @@ const getHandler = (
     def.get(
       "/:id",
       "",
-      z.any(),
+      z.unknown(),
       options.schema ??
         z.object({
           id: z.number(),
@@ -413,6 +413,72 @@ describe("RouteHandler", () => {
         const asyncJson = await asyncRoute.handlerWrapped(new Request("https://example.com/1")).then((r) => r.json());
         expect(asyncJson).toEqual({ title: "Hello", content: "World" });
         expect(asyncJson.extra).toBeUndefined();
+      });
+
+      // The typed handler surface (PromisableProperties) only admits Promises as top-level
+      // object properties, so these shapes are only reachable from dynamically-typed handler
+      // data. z.unknown() is used so the handlers below stay honestly typed without casts.
+      describe("nested promise resolution (JSON path)", () => {
+        const handle = RouteHandlerDefiner(
+          async () => "ok",
+          async () => ({}),
+        );
+
+        const jsonOf = (data: unknown) =>
+          handle(def.get("/:id", "", z.unknown()), () => data)
+            .handlerWrapped(new Request("https://example.com/1"))
+            .then((r) => r.json());
+
+        test("promises inside array elements are resolved", async () => {
+          const result = await jsonOf([{ name: Promise.resolve("a") }, { name: Promise.resolve("b") }]);
+          expect(result).toEqual([{ name: "a" }, { name: "b" }]);
+        });
+
+        test("promises inside nested arrays are resolved", async () => {
+          const result = await jsonOf([[Promise.resolve("a"), Promise.resolve("b")], [Promise.resolve("c")]]);
+          expect(result).toEqual([["a", "b"], ["c"]]);
+        });
+
+        test("promises nested several levels deep are resolved", async () => {
+          const result = await jsonOf({ rows: [{ tags: [Promise.resolve("x")] }] });
+          expect(result).toEqual({ rows: [{ tags: ["x"] }] });
+        });
+
+        test("a top-level array of promises is still resolved", async () => {
+          expect(await jsonOf([Promise.resolve("a"), Promise.resolve("b")])).toEqual(["a", "b"]);
+        });
+
+        test("a fully materialised result is passed through unchanged", async () => {
+          const plain = [{ a: 1 }, { a: 2 }];
+          expect(await jsonOf(plain)).toEqual(plain);
+        });
+
+        test("non-plain objects are values, not containers to traverse", async () => {
+          const result = await jsonOf({ when: new Date("2020-01-01T00:00:00.000Z") });
+          expect(result).toEqual({ when: "2020-01-01T00:00:00.000Z" });
+        });
+
+        test("non-plain objects stay untouched even when a sibling holds a promise", async () => {
+          const result = await jsonOf({ v: Promise.resolve(1), when: new Date("2020-01-01T00:00:00.000Z") });
+          expect(result).toEqual({ v: 1, when: "2020-01-01T00:00:00.000Z" });
+        });
+
+        // 0.1.x resolved direct Promise properties on any object, including class
+        // instances — without this they reach JSON.stringify unresolved and serialise as {}.
+        test("direct Promise properties on class instances are resolved", async () => {
+          class Dto {
+            name = Promise.resolve("a");
+            plain = 1;
+          }
+          expect(await jsonOf(new Dto())).toEqual({ name: "a", plain: 1 });
+        });
+
+        test("class instances nested in plain structures get their promises resolved", async () => {
+          class Dto {
+            name = Promise.resolve("x");
+          }
+          expect(await jsonOf({ rows: [new Dto()] })).toEqual({ rows: [{ name: "x" }] });
+        });
       });
 
       describe("primitive output schemas", () => {

@@ -1,5 +1,5 @@
 import type { ZodNumber, ZodString, ZodType } from "zod";
-import { z, ZodArray, ZodEnum, ZodLiteral, ZodObject, ZodOptional, ZodReadonly, ZodUnion } from "zod";
+import { z, ZodArray, ZodCatch, ZodDefault, ZodEnum, ZodLiteral, ZodNullable, ZodObject, ZodOptional, ZodPipe, ZodReadonly, ZodUnion } from "zod";
 import type { HTTPMethods, HTTPMethodsWithBody, HTTPMethodsWithoutBody } from "./staticDefs.ts";
 import type { FilterByIdEnding, PathToMandatoryKeys, PathToOptionalKeys, ValidateOptionalUrl } from "./urlType.ts";
 import {
@@ -41,6 +41,17 @@ export type Route<
 
 type MaybeZodType = ZodType | undefined;
 
+/** Peels off wrapper schemas (readonly/optional/default/nullable/catch/pipe) down to the inner type. */
+function unwrapSchema(schema: ZodType): ZodType {
+  if (schema instanceof ZodReadonly) return unwrapSchema(schema.unwrap() as ZodType);
+  if (schema instanceof ZodOptional) return unwrapSchema(schema.unwrap() as ZodType);
+  if (schema instanceof ZodDefault) return unwrapSchema(schema.unwrap() as ZodType);
+  if (schema instanceof ZodNullable) return unwrapSchema(schema.unwrap() as ZodType);
+  if (schema instanceof ZodCatch) return unwrapSchema(schema.unwrap() as ZodType);
+  if (schema instanceof ZodPipe) return unwrapSchema(schema.def.in as ZodType);
+  return schema;
+}
+
 /**
  * Returns true if a schema branch is "string-origin" — i.e. it can receive a raw string
  * from a URL and produce a meaningful result after the coercion pre-pass.
@@ -48,13 +59,12 @@ type MaybeZodType = ZodType | undefined;
  * system cannot determine which branch the consumer intended.
  */
 function isStringOrigin(schema: ZodType): boolean {
-  if (schema instanceof ZodReadonly) return isStringOrigin(schema.unwrap() as ZodType);
-  if (schema instanceof ZodOptional) return isStringOrigin(schema.unwrap() as ZodType);
-  if (schema instanceof z.ZodString) return true;
-  if (schema instanceof z.ZodNumber) return true;
-  if (schema instanceof z.ZodBoolean) return true;
-  if (schema instanceof ZodEnum) return true;
-  if (schema instanceof ZodLiteral) return typeof schema.value === "string";
+  const unwrapped = unwrapSchema(schema);
+  if (unwrapped instanceof z.ZodString) return true;
+  if (unwrapped instanceof z.ZodNumber) return true;
+  if (unwrapped instanceof z.ZodBoolean) return true;
+  if (unwrapped instanceof ZodEnum) return true;
+  if (unwrapped instanceof ZodLiteral) return typeof unwrapped.value === "string";
   return false;
 }
 
@@ -67,11 +77,10 @@ function isStringOrigin(schema: ZodType): boolean {
  * @param path - dot-separated field path for error messages (e.g. "filters.0.value")
  */
 export function assertNoAmbiguousUnions(schema: ZodType, path = ""): void {
-  if (schema instanceof ZodReadonly) return assertNoAmbiguousUnions(schema.unwrap() as ZodType, path);
-  if (schema instanceof ZodOptional) return assertNoAmbiguousUnions(schema.unwrap() as ZodType, path);
+  const unwrapped = unwrapSchema(schema);
 
-  if (schema instanceof ZodUnion) {
-    const stringOriginBranches = (schema.options as ZodType[]).filter(isStringOrigin);
+  if (unwrapped instanceof ZodUnion) {
+    const stringOriginBranches = (unwrapped.options as ZodType[]).filter(isStringOrigin);
     if (stringOriginBranches.length > 1) {
       const at = path ? ` at field "${path}"` : "";
       const branches = stringOriginBranches.map((b) => b.constructor.name).join(", ");
@@ -81,21 +90,21 @@ export function assertNoAmbiguousUnions(schema: ZodType, path = ""): void {
       );
     }
     // recurse into each branch to catch nested unions
-    for (const branch of schema.options as ZodType[]) {
+    for (const branch of unwrapped.options as ZodType[]) {
       assertNoAmbiguousUnions(branch, path);
     }
     return;
   }
 
-  if (schema instanceof ZodObject) {
-    for (const [key, value] of Object.entries(schema.shape as Record<string, ZodType>)) {
+  if (unwrapped instanceof ZodObject) {
+    for (const [key, value] of Object.entries(unwrapped.shape as Record<string, ZodType>)) {
       assertNoAmbiguousUnions(value, path ? `${path}.${key}` : key);
     }
     return;
   }
 
-  if (schema instanceof ZodArray) {
-    assertNoAmbiguousUnions(schema.element as ZodType, path ? `${path}[]` : "[]");
+  if (unwrapped instanceof ZodArray) {
+    assertNoAmbiguousUnions(unwrapped.element as ZodType, path ? `${path}[]` : "[]");
     return;
   }
 }

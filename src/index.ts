@@ -39,3 +39,13 @@ export { type RouteBase, type RouteWithBody, type RouteWithoutBody } from "./rou
 export { serveHotBuns } from "./bunServer.ts";
 
 export { initFileLogger, readLogfile, logFileChangeWatcher } from "./logger.ts";
+
+export {
+  createClient,
+  ApiError,
+  NETWORK_ERROR_STATUS,
+  INVALID_RESPONSE_STATUS,
+  type ApiClient,
+  type ClientOptions,
+  type CallSettings,
+} from "./clientApiCall.ts";

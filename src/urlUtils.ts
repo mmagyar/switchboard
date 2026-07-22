@@ -58,7 +58,7 @@ export const getNonIdNames = <T extends string[]>(keys: T): FilterByIdEnding<T, 
   return keys.filter((x) => !(x.endsWith("_id") || x.endsWith("Id"))) as FilterByIdEnding<T, false>;
 };
 
-export const extractParams = (route: string, path: URL): Record<string, string> => {
+export const extractParams = (route: string, path: URL): Record<string, string | undefined> => {
   const routeParts = decomposeUrl(route);
   const pathParts = decomposeUrl(path.pathname);
 

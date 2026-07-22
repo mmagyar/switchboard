@@ -2,6 +2,8 @@ import type { ValidateOptionalUrl } from "./urlType.ts";
 import { parseHTTPMethod, RequestError, type HTTPMethods } from "./staticDefs.ts";
 import { checkRouteOptionalParameterOrder, decomposeUrl } from "./urlUtils.ts";
 
+const escapeRegex = (str: string): string => str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 type StoredRoute = {
   method: HTTPMethods;
   route: string;
@@ -155,9 +157,10 @@ export class Router {
           }
           this.registeredRoutes.add(prefixKey);
           const capturedPrefix = prefix;
+          const prefixRegex = new RegExp(`^/${escapeRegex(capturedPrefix)}`);
           trieInsert(this.root, method, prefixedPath, (req) => {
             const url = new URL(req.url);
-            url.pathname = url.pathname.replace(new RegExp(`^/${capturedPrefix}`), "") || "/";
+            url.pathname = url.pathname.replace(prefixRegex, "") || "/";
             return route.handlerWrapped(new Request(url.toString(), req), capturedPrefix);
           });
         }

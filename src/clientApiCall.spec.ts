@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { z } from "zod";
-import { ApiError, createClient } from "./clientApiCall.ts";
+import { ApiError, createClient, INVALID_RESPONSE_STATUS, NETWORK_ERROR_STATUS } from "./clientApiCall.ts";
 import { define } from "./routeDef.ts";
 
 const def = define<"public">();
@@ -351,5 +351,114 @@ describe("createClient", () => {
     await call(route, {}, undefined, { withCredentials: false });
     const init = fetchSpy.mock.calls[0]![1] as RequestInit;
     expect(init.credentials).toBeUndefined();
+  });
+
+  // -- Failure classification -----------------------------------------------
+
+  test("a rejected fetch becomes an ApiError with the network sentinel status", async () => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () => {
+        throw new TypeError("Failed to fetch");
+      }) as unknown as typeof globalThis.fetch,
+    );
+    const call = createClient("http://example.com");
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    const caught = await call(route, {}).catch((e: unknown) => e);
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).status).toBe(NETWORK_ERROR_STATUS);
+    expect((caught as ApiError).kind).toBe("network");
+    expect((caught as ApiError).message).toContain("Failed to fetch");
+  });
+
+  test("an onUnauthorized callback that throws propagates instead of becoming a network error", async () => {
+    mockErrorFetch(401);
+    const boom = new Error("redirect to login");
+    const call = createClient("http://example.com", {
+      onUnauthorized: () => {
+        throw boom;
+      },
+    });
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    const caught = await call(route, {}).catch((e: unknown) => e);
+    // The consumer's own failure must not be relabelled as an offline/transport problem.
+    expect(caught).toBe(boom);
+    expect(caught).not.toBeInstanceOf(ApiError);
+  });
+
+  test("an unparseable JSON body throws with a >= 400 status, not the response's 2xx", async () => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () =>
+        new Response("{ truncated", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })) as unknown as typeof globalThis.fetch,
+    );
+    const call = createClient("http://example.com");
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    const caught = await call(route, {}).catch((e: unknown) => e);
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).status).toBe(INVALID_RESPONSE_STATUS);
+    expect((caught as ApiError).status).toBeGreaterThanOrEqual(400);
+    // `kind` is what tells this apart from a genuine upstream 502, which shares the number
+    expect((caught as ApiError).kind).toBe("invalid-response");
+    expect((caught as ApiError).message).toContain("not valid JSON");
+  });
+
+  test("an error response still reports its own status when the body is unparseable", async () => {
+    fetchSpy = spyOn(globalThis, "fetch").mockImplementation(
+      (async () =>
+        new Response("<html>gateway down</html>", {
+          status: 503,
+          headers: { "Content-Type": "text/html" },
+        })) as unknown as typeof globalThis.fetch,
+    );
+    const call = createClient("http://example.com");
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    const caught = await call(route, {}).catch((e: unknown) => e);
+    expect((caught as ApiError).status).toBe(503);
+    expect((caught as ApiError).kind).toBe("http");
+    expect((caught as ApiError).message).toContain("gateway down");
+  });
+
+  // -- Request body handling ------------------------------------------------
+
+  test("falsy bodies (false, 0) are sent with a Content-Type header", async () => {
+    mockOkFetch({ value: 1 });
+    const call = createClient("http://example.com");
+
+    const boolRoute = def.post("/flag", "public", z.boolean(), z.object({ value: z.number() }));
+    await call(boolRoute, {}, false);
+    const boolInit = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(boolInit.body).toBe("false");
+    expect((boolInit.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+
+    const numRoute = def.post("/count", "public", z.number(), z.object({ value: z.number() }));
+    await call(numRoute, {}, 0);
+    const numInit = fetchSpy.mock.calls[1]![1] as RequestInit;
+    expect(numInit.body).toBe("0");
+    expect((numInit.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+  });
+
+  test("an omitted body still sends no body and no Content-Type", async () => {
+    mockOkFetch({ value: 1 });
+    const call = createClient("http://example.com");
+    const route = def.get("/ping", "public", z.object({ value: z.number() }));
+    await call(route, {});
+    const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBeUndefined();
+  });
+
+  test("a non-serialisable body throws the caller's error, not a network ApiError", async () => {
+    mockOkFetch({ value: 1 });
+    const call = createClient("http://example.com");
+    const route = def.post("/x", "public", z.record(z.string(), z.unknown()), z.object({ value: z.number() }));
+    const circular: Record<string, unknown> = {};
+    circular["self"] = circular;
+    const caught = await call(route, {}, circular).catch((e: unknown) => e);
+    expect(caught).toBeInstanceOf(TypeError);
+    expect(caught).not.toBeInstanceOf(ApiError);
+    // fetch must never have been attempted — the failure precedes the transport
+    expect(fetchSpy.mock.calls).toHaveLength(0);
   });
 });

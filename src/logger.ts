@@ -55,8 +55,8 @@ export const readLogfile = async (lines = 80) => {
   return await readLastLines("app.log", lines);
 };
 
-export const logFileChangeWatcher = (change: () => void) => {
-  fs.watch("app.log", (eventType, _filename) => {
+export const logFileChangeWatcher = (change: () => void): fs.FSWatcher => {
+  return fs.watch("app.log", (eventType, _filename) => {
     if (eventType === "change") {
       change();
     }

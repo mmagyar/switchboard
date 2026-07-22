@@ -105,19 +105,55 @@ const errorResponse =
     );
   };
 
-const resolveAllProperties = async (obj: Record<string, unknown>): Promise<Record<string, unknown>> => {
-  const resolved = await Promise.all(Object.entries(obj).map(async ([k, v]) => [k, await v] as const));
-  return Object.fromEntries(resolved);
+/** Only plain objects are traversed — Date, Map, class instances etc. are values, not containers. */
+const isPlainObject = (value: unknown): value is Record<string, unknown> => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value) as object | null;
+  return proto === Object.prototype || proto === null;
 };
 
-const hasPromiseValues = (obj: unknown): obj is Record<string, unknown> =>
-  obj !== null &&
-  typeof obj === "object" &&
-  !Array.isArray(obj) &&
-  Object.values(obj as Record<string, unknown>).some((v) => v instanceof Promise);
+/** Structural read-only view of any non-null object's own enumerable properties. */
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
 
-const hasArrayPromiseElements = (obj: unknown): obj is unknown[] =>
-  Array.isArray(obj) && obj.some((v) => v instanceof Promise);
+/**
+ * Non-plain objects (class instances) are values, not containers — except for direct
+ * Promise-valued properties, which JSON.stringify would serialise as `{}`. Resolving
+ * those (one level, own enumerable props only) matches what 0.1.x did.
+ */
+const hasDirectPromiseValues = (value: Record<string, unknown>): boolean =>
+  Object.values(value).some((v) => v instanceof Promise);
+
+/**
+ * Synchronous, allocation-free scan for Promises at any depth. Gating the resolve pass on this
+ * keeps a fully-materialised response (the common case) from allocating a Promise per element.
+ */
+const containsPromise = (value: unknown): boolean => {
+  if (value instanceof Promise) return true;
+  if (Array.isArray(value)) return value.some(containsPromise);
+  if (isPlainObject(value)) return Object.values(value).some(containsPromise);
+  if (isObjectRecord(value)) return hasDirectPromiseValues(value);
+  return false;
+};
+
+/** Resolves Promises at any depth, in arrays and plain objects alike. */
+const resolveDeep = async (value: unknown): Promise<unknown> => {
+  const awaited = await value;
+  if (Array.isArray(awaited)) return await Promise.all(awaited.map(resolveDeep));
+  if (isPlainObject(awaited)) {
+    const entries = await Promise.all(
+      Object.entries(awaited).map(async ([key, v]) => [key, await resolveDeep(v)] as const),
+    );
+    return Object.fromEntries(entries);
+  }
+  if (isObjectRecord(awaited) && hasDirectPromiseValues(awaited)) {
+    // Class instance with direct Promise values: resolve one level, as 0.1.x did. Promise-free
+    // instances (Date, Map, DTOs with a toJSON) pass through below, keeping their prototype.
+    const entries = await Promise.all(Object.entries(awaited).map(async ([key, v]) => [key, await v] as const));
+    return Object.fromEntries(entries);
+  }
+  return awaited;
+};
 
 /**
  * Wraps the handler with the necessary logic to handle the request.
@@ -221,7 +257,7 @@ export const wrapHandler = <
       const hasBody = method === "post" || method === "put" || method === "patch";
       if (hasBody) {
         const contentType = req.headers.get("content-type");
-        let data: Record<string, unknown> | undefined;
+        let data: unknown;
         if (contentType?.includes("form")) {
           const formParsed: Record<string, unknown> = {};
           const formData = await req.formData();
@@ -248,7 +284,7 @@ export const wrapHandler = <
           const bodyText = await req.text();
           if (bodyText.trim() !== "") {
             try {
-              data = JSON.parse(bodyText) as Record<string, unknown>;
+              data = JSON.parse(bodyText) as unknown;
             } catch {
               return new Response("Body is not valid JSON", { status: 400 });
             }
@@ -283,10 +319,8 @@ export const wrapHandler = <
       }
 
       // JSON path: resolve all promises, validate the whole object, then JSON.stringify
-      if (hasPromiseValues(result)) {
-        result = await resolveAllProperties(result);
-      } else if (hasArrayPromiseElements(result)) {
-        result = await Promise.all(result);
+      if (containsPromise(result)) {
+        result = await resolveDeep(result);
       }
       const output = outputValidation.safeParse(result);
       if (!output.success) {

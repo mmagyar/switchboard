@@ -198,7 +198,7 @@ export const parseBooleanFromForm = (
 };
 
 export const parseObjectFromForm = (
-  input: Record<string, string | string[]>,
+  input: Record<string, string | string[] | undefined>,
 ): Record<string, object | number | string> => {
   let result = {};
 
@@ -259,7 +259,7 @@ export const parseUrl = <PATH extends string, PARAMS extends z.ZodType>(
       }
     }
   }
-  let fromUrl: Record<string, string | string[]> = {
+  let fromUrl: Record<string, string | string[] | undefined> = {
     ...searchParams,
     ...extractParams(path, url),
   };

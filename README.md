@@ -259,7 +259,7 @@ The object returned by `formatOutput` has the following fields:
 
 | Field | Type | Description |
 |---|---|---|
-| `data` | `BodyInit \| undefined` | The response body |
+| `data` | `ResponseBody \| undefined` | The response body — `ResponseBody` is derived from the ambient `Response` constructor's first argument, so it matches whatever runtime types are in scope (Bun, DOM, Workers) |
 | `headers` | `Headers` | Response headers (e.g. `Content-Type`) |
 | `redirect` | `true \| undefined` | When set, the response status defaults to `303 See Other` |
 | `status` | `number \| undefined` | Explicit status code; takes priority over the `redirect` default and the method default |

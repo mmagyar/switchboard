@@ -27,6 +27,7 @@ export {
   type FormatOutput,
   type FormatOutputReturn,
   type FormatOutputReturnStructure,
+  type ResponseBody,
   type RouteWithHandler,
   type Promisable,
   type PromisableProperties,

@@ -43,8 +43,13 @@ export type HandlerBothFn<
     ? HandlerWithoutBodyFn<USER, PARAMS, OUT>
     : never;
 
+/** First constructor argument of the ambient `Response`. Derived instead of naming `BodyInit`
+ *  directly so it stays assignable even when a consumer's type environment (e.g.
+ *  `@cloudflare/workers-types`) redeclares `BodyInit`/`Response` incompatibly with the DOM lib. */
+export type ResponseBody = NonNullable<ConstructorParameters<typeof Response>[0]>;
+
 export type FormatOutputReturnStructure = {
-  data?: BodyInit;
+  data?: ResponseBody;
   headers: Headers;
   redirect?: true;
   status?: number;

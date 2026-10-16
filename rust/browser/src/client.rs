@@ -113,7 +113,9 @@ impl BrowserClient {
         settings: &CallSettings,
     ) -> Result<PreparedRequest, ClientError> {
         let body = body
-            .map(serde_json::to_string)
+            .map(|body| {
+                serde_json::to_value(body).and_then(|value| switchboard::json::stringify(&value))
+            })
             .transpose()
             .map_err(|error| {
                 ClientError::request(format!("Cannot serialize request body: {error}"))
@@ -192,7 +194,7 @@ pub(crate) fn decode_response<O: serde::de::DeserializeOwned>(
         let fallback = format!("Unknown error, status: {status}");
         let message = match body {
             Ok(text) if !text.is_empty() => serde_json::from_str::<serde_json::Value>(&text)
-                .map(|value| value.to_string())
+                .and_then(|value| switchboard::json::stringify(&value))
                 .unwrap_or(text),
             _ => fallback,
         };

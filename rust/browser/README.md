@@ -1,8 +1,8 @@
 # switchboard-browser
 
-Optional browser code authored in Rust and compiled to WASM. Server-rendered Maud HTML works without this crate. There is no hydration runtime, virtual DOM, server dependency or handwritten JavaScript product logic. Browser APIs require `wasm32-unknown-unknown` and a browser `Window`; native tests exercise the shared pure request/response logic.
+Optional browser code authored in Rust and compiled to WASM. Server-rendered Maud HTML works without this crate. There is no hydration runtime or virtual DOM. Browser APIs require `wasm32-unknown-unknown` and a browser `Window`; native tests exercise the shared pure request/response and typed-route boundaries.
 
-This independent `cdylib`/`rlib` crate forbids unsafe authored Rust. It depends on serde, serde_json, wasm-bindgen, wasm-bindgen-futures and web-sys. Cargo.lock records the resolved versions.
+This independent `cdylib`/`rlib` crate forbids unsafe authored Rust. It depends on the shared `switchboard` core with `default-features = false`, serde, serde_json, wasm-bindgen, wasm-bindgen-futures and web-sys. Native HTTP client and server hosting features are disabled in browser builds. Cargo.lock records the resolved versions.
 
 ## Application integration
 
@@ -57,7 +57,22 @@ pub async fn start() -> Result<(), JsValue> {
 
 `BrowserClient::call<B, O>` accepts an already encoded path, a method string, an optional `&B: Serialize`, and `CallSettings`. It returns `Result<Option<O>, ClientError>` where `O: DeserializeOwned`. Bodies such as `false`, `0`, `""` and JSON null are sent when present. Use `None::<&()>` for no body. The base URL and path are concatenated literally, matching the Bun client. They must contain the intended slash boundary. Browser fetch resolves relative URLs against the document.
 
-This transport deliberately defines no duplicate route or schema model. The root-owned future typed-route adapter will validate/encode parameters through the shared route API and delegate to `call`. Until that adapter exists, callers resolve paths themselves. Serde deserialization validates the requested output type. Refinements require application validation; serde does not reproduce every server schema rule. `serde_json::Value` explicitly requests untyped JSON. Text responses deserialize from a Rust string value, so use `String` or `Value` for text, not a numeric type.
+### Shared typed routes
+
+`BrowserClient::call_route(&route, &params, body, &settings)` accepts the core `switchboard::TypedRoute<P, B, O, Permission>` directly and returns `Result<Option<O>, RouteCallError>`. Parameters are serialized and validated/encoded by core `params::def_to_url`. Successful values pass through the route's output `Schema::parse_value` before serde decodes `O`. Schema transforms and object stripping therefore precede Rust deserialization. The adapter defines no duplicate route or schema model.
+
+`call_route_unchecked` has the same arguments but returns `Result<Option<serde_json::Value>, RouteCallError>`. It still validates parameters and parses JSON, but skips the output schema and has no `O: DeserializeOwned` bound. It never claims the route's output type. Empty-response semantics and per-call overrides are shared with raw `call`.
+
+```rust,ignore
+let route = shared_contracts::item_route()?;
+let client = BrowserClient::new("", ClientOptions::default());
+let item = client.call_route(&route, &params, None, &CallSettings::default()).await?;
+let untrusted = client.call_route_unchecked(&route, &params, None, &CallSettings::default()).await?;
+```
+
+`RouteCallError` preserves failures as `Transport(ClientError)`, `Serialization(serde_json::Error)`, `Parameters(HttpError)`, `Validation(ValidationError)` and `Deserialization(serde_json::Error)`, each with an error source. A serde-compatible string can fail an output refinement and remains a `Validation` error rather than an HTTP/502 failure.
+
+Raw `call` remains available with its original signature. It validates only the serde output contract; use the typed-route adapter for schema refinements. `serde_json::Value` explicitly requests untyped JSON. Text responses deserialize from a Rust string value, so use `String` or `Value` for text, not a numeric type. Requests and compacted JSON HTTP errors reuse core ECMAScript JSON stringification (numeric spelling and index-key order).
 
 ## Settings and failures
 
@@ -67,7 +82,7 @@ This transport deliberately defines no duplicate route or schema model. The root
 - `ClientErrorKind::Http` preserves the actual HTTP status for statuses >= 400. Error bodies are read once; valid JSON is compacted, otherwise text is retained. An unreadable/empty error body keeps a status-only message.
 - `Network` uses status 0 for failed fetch or unreadable non-JSON success bodies. `InvalidResponse` uses status 502 for malformed/unreadable JSON or a serde output mismatch. A genuine upstream 502 remains `Http`. `Request` uses status 0 for caller serialization, header, URL or request-construction errors. Branch on `kind` as well as `status`.
 - A successful effective HEAD or DELETE, or status 204/205, returns `None` without consuming or validating a body. An empty non-JSON body also returns `None`. An empty body advertised as JSON is invalid. JSON null deserialized as `Value` returns `Some(Value::Null)`.
-- There is no validation opt-out that claims a typed result. Request `Value` instead. GET/HEAD bodies and forbidden methods are rejected by browser request construction rather than disguised as network errors.
+- There is no validation opt-out that claims a typed result. Use `call_route_unchecked` or request `Value` from raw `call`. GET/HEAD bodies and forbidden methods are rejected by browser request construction rather than disguised as network errors.
 
 ## Event and WebSocket ownership
 
@@ -148,4 +163,50 @@ wc -c path/to/static/generated/page.js
 
 Record the exact Rust/wasm-bindgen versions, build profile, enabled features, application behavior, raw bytes and compressed bytes. The standalone crate's unbound cdylib size is not a representative page-size benchmark.
 
-Native tests cover request preparation, serde validation, error classification, empty-response semantics, auth callbacks and exact reload-message dispatch. wasm target checking/building verifies web-sys bindings. Real browser fetch/CORS, event cleanup, socket lifecycle and navigation/reload need a separate browser integration run against a live server. Compilation alone does not establish those behaviors.
+## Linkable demo and real-browser proof
+
+[`examples/demo`](examples/demo) contains a linkable Rust WASM application, shared typed contracts and a live Rust/Maud HTTP server. The same contract function is used by `bind_typed` on the server and `call_route` in the browser. The deliberate invalid-output endpoint returns serde-compatible JSON that violates the shared title literal. The page displays its schema rejection and the unchecked JSON, a counter, resource disposal and WebSocket logs. The only authored JavaScript product file initializes WASM and frees the Rust page owner on `pagehide`. All fetch work is awaited. Rust listeners/connections belong to the exported `Page`; closing resources removes the counter listener and closes the socket. No `Closure::forget` is used.
+
+Exact commands from the repository root (wasm-bindgen CLI must match lockfile 0.2.129):
+
+```sh
+export RUSTUP_HOME=/home/dev/switchboard-worktrees/rust-implementation/.tmp/rustup
+export CARGO_HOME=/home/dev/switchboard-worktrees/rust-implementation/.tmp/cargo
+export PATH="$CARGO_HOME/bin:$PATH"
+export CARGO_PROFILE_DEV_DEBUG=0
+
+cargo test --manifest-path rust/browser/Cargo.toml --locked
+cargo check --manifest-path rust/browser/Cargo.toml --locked --target wasm32-unknown-unknown
+cargo build --manifest-path rust/browser/examples/demo/Cargo.toml --locked --target wasm32-unknown-unknown --release
+/home/dev/switchboard-worktrees/rust-implementation/.tmp/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen \
+  --target web --out-name demo --out-dir rust/browser/examples/demo/static/generated \
+  rust/browser/examples/demo/target/wasm32-unknown-unknown/release/switchboard_browser_demo.wasm
+cargo build --manifest-path rust/browser/examples/demo/Cargo.toml --locked --features server --bin browser-demo-server
+(cd rust/browser && bun install --frozen-lockfile)
+bun rust/browser/measure.ts
+bun rust/browser/integration.ts
+```
+
+Playwright-core 1.60.0 requires a local matching Chromium installation, for example `bun x --package playwright-core playwright-core install chromium` from `rust/browser`. Integration boots its own Rust server on `127.0.0.1:3217`, runs both Rust and reference pages, and tears down Chromium and the server. A port collision is an error. The demo can also be run directly with `rust/browser/examples/demo/target/debug/browser-demo-server`; open `http://127.0.0.1:3217/`. It is a localhost functional demo, not a production server configuration.
+
+`reference.ts` and `measure.ts` are test/reference tooling only. Bun.build minifies a browser bundle importing the unchanged original `src/clientExport.ts` and Zod. Its route/schema, typed fetch, invalid-output rejection, unchecked fetch, counter/disposal, WebSocket logs/close and reload behavior match the Rust demo. The same browser assertions run against `/reference`. No root package or original source is modified.
+
+Evidence is emitted under repository `.tmp/browser/`: `browser-evidence.json`, `reference-evidence.json`, `browser-desktop.png`, `browser-mobile.png`, `reference-desktop.png`, `reference-mobile.png`, `live-server.log` and `artifact-sizes.json`. Generated application bindings and WASM stay under ignored `examples/demo/static/generated/`; build them with the commands above.
+
+The measured linked application (release `opt-level=s`, LTO, one codegen unit, debug stripping; wasm-bindgen 0.2.129; Bun 1.4.0) is **558,185 bytes raw / 162,180 gzip** WASM and **24,438 / 5,484** generated JS. Their total is **582,623 / 167,664**, or **582,788 / 167,812** including the bootstrap. The comparable minified original-client reference JS is **290,584 / 66,285**. Gzip is level 9, applied independently per HTTP resource with no filename/timestamp metadata. Shared HTML/CSS, declaration files and source maps are excluded from both totals. These numbers establish no Rust size advantage. Standalone unbound crate size is not representative.
+
+Validation commands:
+
+```sh
+cargo fmt --manifest-path rust/browser/Cargo.toml -- --check
+cargo fmt --manifest-path rust/browser/examples/demo/Cargo.toml -- --check
+cargo clippy --manifest-path rust/browser/Cargo.toml --all-targets --locked -- -D warnings
+cargo clippy --manifest-path rust/browser/Cargo.toml --lib --locked --target wasm32-unknown-unknown -- -D warnings
+cargo clippy --manifest-path rust/browser/examples/demo/Cargo.toml --all-targets --features server --locked -- -D warnings
+cargo clippy --manifest-path rust/browser/examples/demo/Cargo.toml --lib --target wasm32-unknown-unknown --locked -- -D warnings
+bun x tsc --ignoreConfig --noEmit --strict --skipLibCheck --allowImportingTsExtensions --module esnext --moduleResolution bundler --target esnext --types bun rust/browser/integration.ts rust/browser/reference.ts rust/browser/measure.ts
+bun run check
+bun test
+```
+
+Native tests cover parameter encoding/failures, structured schema validation versus serde failure, schema stripping, absent bodies, ECMAScript stringification, raw error classification, auth callbacks and reload-message dispatch. Mutation proof bypassed output `Schema::parse_value`; the refinement regression failed with an incorrectly accepted `title: "rejected"`, then passed after restoration. Chromium 148.0.7778.96 exercised real fetch and literal validation, unchanged log text, listener removal after disposal, WebSocket close, exact `RELOAD` receipt and a navigation entry of type `reload`. Desktop (1100px) and mobile (360px) screenshots were inspected: legible labels/buttons and wrapped JSON, no horizontal overflow. Cross-origin CORS, credential/cookie policy, HTTPS/WSS, offline transport and browsers other than Chromium remain unverified by this demo.

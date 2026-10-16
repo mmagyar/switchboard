@@ -2,11 +2,15 @@
 
 mod client;
 #[cfg(any(target_arch = "wasm32", test))]
+mod typed_route;
+#[cfg(any(target_arch = "wasm32", test))]
 pub use client::BrowserClient;
 pub use client::{
     CallSettings, ClientError, ClientErrorKind, ClientOptions, Credentials,
     INVALID_RESPONSE_STATUS, NETWORK_ERROR_STATUS,
 };
+#[cfg(any(target_arch = "wasm32", test))]
+pub use typed_route::RouteCallError;
 
 #[cfg(target_arch = "wasm32")]
 mod browser_fetch;

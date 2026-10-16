@@ -10,6 +10,7 @@ license = "MIT"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+switchboard = { path = "..", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
@@ -20,6 +21,9 @@ web-sys = { version = "0.3", features = [
   "console", "Event", "EventTarget", "Headers", "Location", "MessageEvent",
   "Request", "RequestCredentials", "RequestInit", "Response", "WebSocket", "Window",
 ] }
+
+[dev-dependencies]
+schemars = "1"
 
 [profile.release]
 lto = true

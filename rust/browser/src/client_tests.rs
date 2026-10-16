@@ -265,3 +265,22 @@ fn authorization_callbacks_are_specific_to_status() {
     client.notify_status(200);
     assert_eq!((unauthorized.get(), forbidden.get()), (1, 1));
 }
+#[test]
+fn request_and_http_error_json_use_shared_ecmascript_stringification() {
+    let value = json!({"10": 1.0, "2": 1e21, "01": -0.0, "n": 9007199254740993u64});
+    let expected = r#"{"2":1e+21,"10":1,"01":0,"n":9007199254740992}"#;
+    let client = BrowserClient::new("", ClientOptions::default());
+    assert_eq!(
+        client
+            .prepare("post", "/", Some(&value), &CallSettings::default())
+            .unwrap()
+            .body
+            .as_deref(),
+        Some(expected)
+    );
+    let error = decode_response::<Value>("get", 422, "application/json", Ok(value.to_string()))
+        .unwrap_err();
+    assert_eq!(error.kind, ClientErrorKind::Http);
+    assert_eq!(error.status, 422);
+    assert_eq!(error.message, expected);
+}

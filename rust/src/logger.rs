@@ -3,11 +3,12 @@
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Condvar, Mutex},
+    thread::{self, ThreadId},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -54,9 +55,9 @@ impl FileLogger {
     /// Values use the reference's single-value versus argument-array JSON encoding.
     pub fn log(&self, level: LogLevel, values: &[Value]) -> io::Result<()> {
         let content = if let [value] = values {
-            serde_json::to_string(value)?
+            crate::json::stringify(value)?
         } else {
-            serde_json::to_string(values)?
+            crate::json::stringify(&Value::Array(values.to_vec()))?
         };
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -96,12 +97,74 @@ pub trait LogWatcher: Send {
     fn close(&mut self);
 }
 
+type ChangeCallback = Arc<dyn Fn() + Send + Sync>;
+
+struct CallbackState {
+    callback: Option<ChangeCallback>,
+    running: HashMap<ThreadId, usize>,
+}
+
+struct Callbacks {
+    state: Mutex<CallbackState>,
+    finished: Condvar,
+}
+
+struct RunningCallback(Arc<Callbacks>);
+
+impl Drop for RunningCallback {
+    fn drop(&mut self) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .expect("watcher callback state poisoned");
+        let current = thread::current().id();
+        if let Some(count) = state.running.get_mut(&current) {
+            *count -= 1;
+            if *count == 0 {
+                state.running.remove(&current);
+            }
+        }
+        self.0.finished.notify_all();
+    }
+}
+
+impl Callbacks {
+    fn invoke(self: &Arc<Self>) {
+        let callback = {
+            let mut state = self.state.lock().expect("watcher callback state poisoned");
+            let Some(callback) = state.callback.clone() else {
+                return;
+            };
+            *state.running.entry(thread::current().id()).or_default() += 1;
+            callback
+        };
+        let _running = RunningCallback(self.clone());
+        callback();
+    }
+
+    fn close(&self) {
+        let current = thread::current().id();
+        let mut state = self.state.lock().expect("watcher callback state poisoned");
+        state.callback.take();
+        // notify stops its event thread asynchronously. Join callbacks here, allowing self-close.
+        while state.running.keys().any(|id| *id != current) {
+            state = self
+                .finished
+                .wait(state)
+                .expect("watcher callback state poisoned");
+        }
+    }
+}
+
 pub struct LogFileWatcher {
     watcher: Option<RecommendedWatcher>,
+    callbacks: Arc<Callbacks>,
 }
 
 impl LogWatcher for LogFileWatcher {
     fn close(&mut self) {
+        self.callbacks.close();
         self.watcher.take();
     }
 }
@@ -116,15 +179,24 @@ pub fn log_file_change_watcher(
     path: impl AsRef<Path>,
     change: Arc<dyn Fn() + Send + Sync>,
 ) -> notify::Result<LogFileWatcher> {
+    let callbacks = Arc::new(Callbacks {
+        state: Mutex::new(CallbackState {
+            callback: Some(change),
+            running: HashMap::new(),
+        }),
+        finished: Condvar::new(),
+    });
+    let event_callbacks = callbacks.clone();
     let mut watcher =
         notify::recommended_watcher(move |event: notify::Result<notify::Event>| match event {
-            Ok(event) if matches!(event.kind, EventKind::Modify(_)) => change(),
+            Ok(event) if matches!(event.kind, EventKind::Modify(_)) => event_callbacks.invoke(),
             Err(error) => tracing::warn!(%error, "log watcher failed"),
             _ => {}
         })?;
     watcher.watch(path.as_ref(), RecursiveMode::NonRecursive)?;
     Ok(LogFileWatcher {
         watcher: Some(watcher),
+        callbacks,
     })
 }
 
@@ -162,6 +234,39 @@ mod tests {
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::NotFound
+        );
+    }
+
+    #[tokio::test]
+    async fn watcher_can_close_itself_from_its_callback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("app.log");
+        let logger = init_file_logger(&path).unwrap();
+        let holder: Arc<Mutex<Option<LogFileWatcher>>> = Arc::new(Mutex::new(None));
+        let callback_holder = holder.clone();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let watcher = log_file_change_watcher(
+            &path,
+            Arc::new(move || {
+                if let Some(watcher) = callback_holder.lock().unwrap().as_mut() {
+                    watcher.close();
+                }
+                tx.send(()).unwrap();
+            }),
+        )
+        .unwrap();
+        *holder.lock().unwrap() = Some(watcher);
+        logger
+            .log(LogLevel::Info, &[Value::from("changed")])
+            .unwrap();
+        assert_eq!(
+            timeout(Duration::from_secs(2), rx.recv()).await.unwrap(),
+            Some(())
+        );
+        holder.lock().unwrap().take();
+        assert_eq!(
+            timeout(Duration::from_secs(2), rx.recv()).await.unwrap(),
+            None
         );
     }
 

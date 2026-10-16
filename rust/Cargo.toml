@@ -25,6 +25,7 @@ url = "2"
 tokio = { version = "1", features = ["rt", "sync", "macros", "time"] }
 schemars = "1"
 multer = "3"
+ryu-js = "1"
 hyper = { version = "1", features = ["server", "http1", "http2"], optional = true }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio"], optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"], optional = true }

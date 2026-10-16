@@ -97,6 +97,7 @@ impl std::error::Error for ValidationError {}
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Input {
     Absent,
+    Promise,
     Scalar(Value),
     NonFinite { original: String },
     Object(IndexMap<String, Input>),
@@ -120,6 +121,7 @@ impl Input {
     pub(crate) fn to_value(&self) -> Option<Value> {
         match self {
             Self::Absent => None,
+            Self::Promise => Some(json!({})),
             Self::Scalar(value) => Some(value.clone()),
             Self::NonFinite { .. } => Some(Value::Null),
             Self::Object(fields) => Some(Value::Object(
@@ -140,6 +142,7 @@ impl Input {
     fn type_name(&self) -> &'static str {
         match self {
             Self::Absent => "undefined",
+            Self::Promise => "Promise",
             Self::Scalar(Value::Null) => "null",
             Self::Scalar(Value::Bool(_)) => "boolean",
             Self::Scalar(Value::Number(_)) | Self::NonFinite { .. } => "number",
@@ -251,7 +254,7 @@ impl Schema {
                 .map_err(|e| e.at(path)),
             Self::Boolean => Err(invalid_type("boolean", input, path)),
             Self::Literal(expected) => {
-                if !matches!(input, Input::NonFinite { .. })
+                if !matches!(input, Input::NonFinite { .. } | Input::Promise)
                     && input
                         .to_value()
                         .as_ref()
@@ -276,8 +279,11 @@ impl Schema {
                 }
             }
             Self::Object(shape) => {
-                let Input::Object(fields) = input else {
-                    return Err(invalid_type("object", input, path));
+                let empty = IndexMap::new();
+                let fields = match input {
+                    Input::Object(fields) => fields,
+                    Input::Promise => &empty,
+                    _ => return Err(invalid_type("object", input, path)),
                 };
                 let mut output = serde_json::Map::new();
                 let mut issues = Vec::new();
@@ -998,6 +1004,38 @@ mod tests {
             assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
         }
         assert!(serde_json::from_value::<Schema>(json!({"type":"number","value":false})).is_err());
+    }
+
+    #[test]
+    fn unresolved_promises_preserve_formatter_warning_types() {
+        let schema = Schema::Object(IndexMap::from([(
+            "items".into(),
+            Schema::Array(Box::new(Schema::Number)),
+        )]));
+        let input = Input::Object(IndexMap::from([(
+            "items".into(),
+            Input::Array(vec![Input::Promise]),
+        )]));
+        let error = schema.parse_input(&input).unwrap_err();
+        assert_eq!(
+            error.issues,
+            vec![json!({
+                "expected":"number", "code":"invalid_type", "path":["items",0],
+                "message":"Invalid input: expected number, received Promise"
+            })]
+        );
+        assert_eq!(
+            Schema::Object(IndexMap::new())
+                .parse_input(&Input::Promise)
+                .unwrap(),
+            Some(json!({}))
+        );
+        let required = Schema::Object(IndexMap::from([("n".into(), Schema::Number)]));
+        assert_eq!(
+            required.parse_input(&Input::Promise).unwrap_err().issues[0]["message"],
+            "Invalid input: expected number, received undefined"
+        );
+        assert_eq!(input.to_value(), Some(json!({"items":[{}]})));
     }
 
     #[test]

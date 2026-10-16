@@ -9,6 +9,8 @@ use url::Url;
 
 pub mod router;
 pub use router::Router;
+#[cfg(feature = "maud")]
+pub mod render;
 
 pub type Request = http::Request<Body>;
 pub type Response = http::Response<Body>;

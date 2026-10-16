@@ -3,7 +3,7 @@ use crate::{BrowserClient, CallSettings, ClientError, Credentials};
 use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Headers, RequestCredentials, RequestInit, Response};
+use web_sys::{RequestCredentials, RequestInit, Response};
 
 impl BrowserClient {
     /// Deserializes successful JSON into the application's shared Rust type.
@@ -24,9 +24,24 @@ impl BrowserClient {
             Credentials::SameOrigin => RequestCredentials::SameOrigin,
             Credentials::Include => RequestCredentials::Include,
         });
-        let headers = Headers::new().map_err(network_error)?;
+        // Fetch owns validation so initialization errors retain the native fetch message.
+        let mut normalized: Vec<(&str, &str)> = Vec::new();
         for (name, value) in &prepared.headers {
-            headers.set(name, value).map_err(network_error)?;
+            if let Some((_, previous)) = normalized
+                .iter_mut()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            {
+                *previous = value;
+            } else {
+                normalized.push((name, value));
+            }
+        }
+        let headers = js_sys::Array::new();
+        for (name, value) in normalized {
+            headers.push(&js_sys::Array::of2(
+                &JsValue::from_str(name),
+                &JsValue::from_str(value),
+            ));
         }
         init.set_headers(&headers);
         if let Some(body) = &prepared.body {

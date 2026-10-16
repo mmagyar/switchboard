@@ -24,6 +24,7 @@ try {
     const response = await fetch("http://127.0.0.1:3217/health");
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "ready");
+    const displayed: { readonly transport: string; readonly validation: string }[] = [];
     for (const variant of ["browser", "reference"]) {
       const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
       page.setDefaultTimeout(5_000);
@@ -57,6 +58,7 @@ try {
       assert.equal(transportFailures.includes("GET/HEAD method cannot have body"), true);
       assert.equal(transportFailures.includes("TRACE"), true);
       assert.equal(transportFailures.includes("JsValue"), false);
+      displayed.push({ transport: transportFailures, validation: await page.getByText(/^Schema rejected: /).innerText() });
       await page.getByText("Rust server log\nsecond line", { exact: true }).waitFor();
       assert.equal(await page.getByText("Open", { exact: true }).textContent(), "Open");
       await page.screenshot({ path: resolve(artifacts, `${variant}-desktop.png`), fullPage: true });
@@ -106,6 +108,8 @@ try {
       console.log(JSON.stringify(evidence, null, 2));
       await page.close();
     }
+    assert.equal(displayed.length, 2);
+    assert.deepEqual(displayed[0], displayed[1]);
   } finally {
     server.kill("SIGTERM");
     const exitCode = await server.exited;

@@ -319,6 +319,7 @@ fn register(
                             redirect,
                         } => Ok(Formatted {
                             data: text.map(Body::from).unwrap_or_else(Body::empty),
+                            body_kind: switchboard::BodyKind::Text,
                             headers: headers(values).map_err(HttpError::unexpected)?,
                             status,
                             redirect: redirect.unwrap_or(false),

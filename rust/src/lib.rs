@@ -217,8 +217,40 @@ pub struct RegisteredRoute {
     pub handler: Handler,
 }
 
-pub fn response(status: u16, content_type: &str, body: impl Into<Body>) -> Response {
+/// Retains source body identity until the HTTP transport infers a missing MIME type.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BodyKind {
+    #[default]
+    Text,
+    Binary,
+}
+
+impl BodyKind {
+    pub(crate) fn for_type<T: 'static>() -> Self {
+        let id = std::any::TypeId::of::<T>();
+        if id == std::any::TypeId::of::<String>()
+            || id == std::any::TypeId::of::<&'static str>()
+            || id == std::any::TypeId::of::<std::borrow::Cow<'static, str>>()
+        {
+            Self::Text
+        } else {
+            Self::Binary
+        }
+    }
+    #[cfg(feature = "server")]
+    pub(crate) const fn content_type(self) -> &'static str {
+        match self {
+            Self::Text => "text/plain;charset=utf-8",
+            Self::Binary => "application/octet-stream",
+        }
+    }
+}
+
+pub fn response<T: Into<Body> + 'static>(status: u16, content_type: &str, body: T) -> Response {
     let mut response = http::Response::new(body.into());
+    if content_type.is_empty() {
+        response.extensions_mut().insert(BodyKind::for_type::<T>());
+    }
     *response.status_mut() =
         StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     if !content_type.is_empty() {

@@ -193,15 +193,27 @@ impl From<Value> for DeferredValue {
 
 pub struct Formatted {
     pub data: Body,
+    pub body_kind: crate::BodyKind,
     pub headers: HeaderMap,
     pub status: Option<u16>,
     pub redirect: bool,
+}
+
+impl Formatted {
+    pub fn with_body<T: Into<Body> + 'static>(body: T) -> Self {
+        Self {
+            data: body.into(),
+            body_kind: crate::BodyKind::for_type::<T>(),
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for Formatted {
     fn default() -> Self {
         Self {
             data: Body::empty(),
+            body_kind: crate::BodyKind::Text,
             headers: HeaderMap::new(),
             status: None,
             redirect: false,
@@ -660,6 +672,7 @@ where
             let mut response = http::Response::new(formatted.data);
             *response.status_mut() = status;
             *response.headers_mut() = formatted.headers;
+            response.extensions_mut().insert(formatted.body_kind);
             return Ok(response);
         }
         let original = value.resolve().await?;
@@ -1652,6 +1665,7 @@ mod tests {
                     headers.insert("x-custom", "yes".parse().unwrap());
                     Ok(Formatted {
                         data: Body::from("custom"),
+                        body_kind: crate::BodyKind::Text,
                         headers,
                         status,
                         redirect,

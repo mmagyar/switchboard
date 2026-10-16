@@ -2,7 +2,7 @@
 
 use crate::logger::LogWatcher;
 use crate::{Request, Response, Router, response};
-use axum::body::Body;
+use axum::body::{Body, HttpBody};
 use futures_util::{SinkExt, StreamExt, future::BoxFuture};
 use hyper::{body::Incoming, service::service_fn, upgrade::OnUpgrade};
 use hyper_util::rt::TokioIo;
@@ -363,6 +363,20 @@ where
                     }
                 }
             };
+            let mut result = result;
+            if !result.headers().contains_key(http::header::CONTENT_TYPE)
+                && result.body().size_hint().upper() != Some(0)
+            {
+                let kind = result
+                    .extensions()
+                    .get::<crate::BodyKind>()
+                    .copied()
+                    .unwrap_or(crate::BodyKind::Binary);
+                result.headers_mut().insert(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static(kind.content_type()),
+                );
+            }
             Ok::<_, Infallible>(result)
         }
     });
@@ -728,6 +742,54 @@ mod tests {
             matches!(result, Ok(0) | Err(_)),
             "socket remained open: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn live_transport_infers_text_and_binary_mime_without_changing_memory_headers() {
+        let plain = response(404, "", "<script>untrusted</script>");
+        assert!(!plain.headers().contains_key(http::header::CONTENT_TYPE));
+        let mut routes = Router::new();
+        routes
+            .add_route(RegisteredRoute {
+                method: Method::Get,
+                path: "/bytes".into(),
+                prefixes: vec![],
+                handler: Arc::new(|_, _| {
+                    Box::pin(async { response(200, "", bytes::Bytes::from_static(b"hi")) })
+                }),
+            })
+            .unwrap();
+        routes
+            .add_route(RegisteredRoute {
+                method: Method::Get,
+                path: "/empty".into(),
+                prefixes: vec![],
+                handler: Arc::new(|_, _| Box::pin(async { response(200, "", Body::empty()) })),
+            })
+            .unwrap();
+        let mut handle = serve(
+            config(),
+            Arc::new(routes),
+            ServerOptions {
+                access_log: None,
+                ..ServerOptions::default()
+            },
+        )
+        .await
+        .unwrap();
+        let missing = http(handle.local_addr(), "/missing", "localhost").await;
+        assert!(
+            missing.contains("\r\ncontent-type: text/plain;charset=utf-8\r\n"),
+            "{missing}"
+        );
+        let binary = http(handle.local_addr(), "/bytes", "localhost").await;
+        assert!(
+            binary.contains("\r\ncontent-type: application/octet-stream\r\n"),
+            "{binary}"
+        );
+        let empty = http(handle.local_addr(), "/empty", "localhost").await;
+        assert!(!empty.contains("content-type:"), "{empty}");
+        handle.stop().await.unwrap();
     }
 
     #[tokio::test]

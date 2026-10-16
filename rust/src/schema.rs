@@ -571,8 +571,14 @@ impl Schema {
         let Input::Array(items) = input else {
             return Err(invalid_type("tuple", input, path));
         };
-        if items.len() != elements.len() {
-            let lower = items.len() < elements.len();
+        let minimum = elements
+            .iter()
+            .rposition(|element| !element.optional_input())
+            .map_or(0, |index| index + 1);
+        let mut issues = Vec::new();
+        if items.len() < minimum || items.len() > elements.len() {
+            let lower = items.len() < minimum;
+            let bound = if lower { minimum } else { elements.len() };
             let mut issue = serde_json::Map::new();
             issue.insert(
                 "code".into(),
@@ -580,7 +586,7 @@ impl Schema {
             );
             issue.insert(
                 if lower { "minimum" } else { "maximum" }.into(),
-                json!(elements.len()),
+                json!(bound),
             );
             issue.insert("inclusive".into(), json!(true));
             issue.insert("origin".into(), json!("array"));
@@ -591,20 +597,28 @@ impl Schema {
                     "{}: expected array to have {}{} items",
                     if lower { "Too small" } else { "Too big" },
                     if lower { ">=" } else { "<=" },
-                    elements.len()
+                    bound
                 )),
             );
-            return Err(ValidationError {
-                issues: vec![Value::Object(issue)],
-            });
+            issues.push(Value::Object(issue));
+            if lower {
+                return Err(ValidationError { issues });
+            }
         }
-        let mut output = Vec::with_capacity(items.len());
-        let mut issues = Vec::new();
-        for (index, (element, item)) in elements.iter().zip(items).enumerate() {
+        let mut output = Vec::with_capacity(elements.len());
+        for (index, element) in elements.iter().enumerate() {
+            let item = items.get(index).unwrap_or(&Input::Absent);
             let mut child_path = path.to_vec();
             child_path.push(json!(index));
             match element.parse_at(item, &child_path, depth + 1, budget) {
-                Ok(parsed) => output.push(parsed.value.unwrap_or(Value::Null)),
+                Ok(Parsed {
+                    value: Some(value), ..
+                }) => {
+                    output.resize(index, Value::Null);
+                    output.push(value);
+                }
+                Ok(_) if index < items.len() => output.push(Value::Null),
+                Ok(_) => {}
                 Err(error) => issues.extend(error.issues),
             }
         }
@@ -1306,6 +1320,47 @@ mod tests {
 
     fn object(fields: impl IntoIterator<Item = (&'static str, Schema)>) -> Schema {
         Schema::Object(fields.into_iter().map(|(k, s)| (k.into(), s)).collect())
+    }
+
+    #[test]
+    fn oversized_tuples_report_length_then_declared_element_errors() {
+        let schema = Schema::Tuple(vec![
+            Schema::Array(Box::new(Schema::Tuple(vec![
+                Schema::Boolean,
+                Schema::String,
+            ]))),
+            Schema::Nullable(Box::new(Schema::Number)),
+        ]);
+        let error = schema.parse_value(json!(["a", false, 2])).unwrap_err();
+        assert_eq!(
+            error.issues,
+            vec![
+                json!({"code":"too_big","maximum":2,"inclusive":true,"origin":"array","path":[],"message":"Too big: expected array to have <=2 items"}),
+                json!({"expected":"array","code":"invalid_type","path":[0],"message":"Invalid input: expected array, received string"}),
+                json!({"expected":"number","code":"invalid_type","path":[1],"message":"Invalid input: expected number, received boolean"}),
+            ]
+        );
+    }
+
+    #[test]
+    fn tuples_preserve_trailing_optional_absence_and_apply_defaults() {
+        let optional = Schema::Tuple(vec![Schema::Optional(Box::new(Schema::String))]);
+        assert_eq!(optional.parse_value(json!([])).unwrap(), json!([]));
+        let defaults = Schema::Tuple(vec![
+            Schema::Optional(Box::new(Schema::String)),
+            Schema::Default(Box::new(Schema::Number), json!(2)),
+        ]);
+        assert_eq!(defaults.parse_value(json!([])).unwrap(), json!([null, 2]));
+        let required = Schema::Tuple(vec![
+            Schema::String,
+            Schema::Optional(Box::new(Schema::Number)),
+        ]);
+        assert_eq!(
+            required.parse_value(json!([])).unwrap_err().issues,
+            vec![
+                json!({"code":"too_small","minimum":1,"inclusive":true,"origin":"array","path":[],"message":"Too small: expected array to have >=1 items"})
+            ]
+        );
     }
 
     #[test]

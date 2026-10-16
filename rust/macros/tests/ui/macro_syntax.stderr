@@ -1,0 +1,31 @@
+error: expected get, post, put, patch, delete, head, or options
+ --> tests/ui/macro_syntax.rs:4:20
+  |
+4 |     let _ = route!(trace, "/", (), ());
+  |                    ^^^^^
+
+error: route! requires a string literal path for inference; use RouteDef or an explicit TypedRoute parameter struct for dynamic paths
+ --> tests/ui/macro_syntax.rs:5:25
+  |
+5 |     let _ = route!(get, PATH, (), ());
+  |                         ^^^^
+
+error: route! requires a string literal path for inference; use RouteDef or an explicit TypedRoute parameter struct for dynamic paths
+ --> tests/ui/macro_syntax.rs:6:25
+  |
+6 |     let _ = route!(get, concat!("/", "items"), (), ());
+  |                         ^^^^^^
+
+error: body methods require BodyType => OutputType
+ --> tests/ui/macro_syntax.rs:7:13
+  |
+7 |     let _ = route!(post, "/", (), String);
+  |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `route` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: this method has no body; provide only OutputType
+ --> tests/ui/macro_syntax.rs:8:41
+  |
+8 |     let _ = route!(get, "/", (), String => String);
+  |                                         ^

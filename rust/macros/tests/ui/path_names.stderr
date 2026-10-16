@@ -1,0 +1,41 @@
+error: path parameter "" cannot be represented as an inferred Rust field; use raw RouteDef or an explicit TypedRoute parameter struct with serde field renames
+ --> tests/ui/path_names.rs:4:25
+  |
+4 |     let _ = route!(get, "/items/:", (), ());
+  |                         ^^^^^^^^^^
+
+error: path parameter "bad-name" cannot be represented as an inferred Rust field; use raw RouteDef or an explicit TypedRoute parameter struct with serde field renames
+ --> tests/ui/path_names.rs:5:25
+  |
+5 |     let _ = route!(get, "/items/:bad-name", (), ());
+  |                         ^^^^^^^^^^^^^^^^^^
+
+error: duplicate path parameter "name"; use distinct names, raw RouteDef, or an explicit TypedRoute parameter struct
+ --> tests/ui/path_names.rs:6:25
+  |
+6 |     let _ = route!(get, "/:name/:name?", (), ());
+  |                         ^^^^^^^^^^^^^^^
+
+error: path parameter "self" cannot be represented as an inferred Rust field; use raw RouteDef or an explicit TypedRoute parameter struct with serde field renames
+ --> tests/ui/path_names.rs:7:25
+  |
+7 |     let _ = route!(get, "/:self", (), ());
+  |                         ^^^^^^^^
+
+error: path parameter "Self" cannot be represented as an inferred Rust field; use raw RouteDef or an explicit TypedRoute parameter struct with serde field renames
+ --> tests/ui/path_names.rs:8:25
+  |
+8 |     let _ = route!(get, "/:Self", (), ());
+  |                         ^^^^^^^^
+
+error: path parameter "super" cannot be represented as an inferred Rust field; use raw RouteDef or an explicit TypedRoute parameter struct with serde field renames
+ --> tests/ui/path_names.rs:9:25
+  |
+9 |     let _ = route!(get, "/:super", (), ());
+  |                         ^^^^^^^^^
+
+error: path parameter "crate" cannot be represented as an inferred Rust field; use raw RouteDef or an explicit TypedRoute parameter struct with serde field renames
+  --> tests/ui/path_names.rs:10:25
+   |
+10 |     let _ = route!(get, "/:crate", (), ());
+   |                         ^^^^^^^^^

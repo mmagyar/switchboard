@@ -125,6 +125,11 @@ describe("compat differential checker", () => {
     expect(result).toEqual({ code: 0, stdout: '{"cases":94,"mismatches":0}\n', stderr: "" });
   });
 
+  test("portable CLI reports the one excluded Bun constructor case explicitly", async () => {
+    const result = await invokeCheck(["--portable-only", Bun.which("bun") ?? "bun", new URL("./reference.ts", import.meta.url).pathname]);
+    expect(result).toEqual({ code: 0, stdout: '{"cases":93,"mismatches":0,"excludedRuntimeCases":["method-unsupported"]}\n', stderr: "" });
+  });
+
   test("CLI reports a semantic mismatch with complete validation text", async () => {
     const script = `
       import {runCase} from ${JSON.stringify(new URL("./reference.ts", import.meta.url).href)};

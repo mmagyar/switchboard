@@ -44,24 +44,11 @@ Schemas use ordinary object unknown-key stripping, without additional coercion/r
 
 ## Build and run
 
-Use the shared toolchain location and a dedicated build target. The integrating manifest must declare the native client binary with `required-features = ["client"]`:
-
-```toml
-[[bin]]
-name = "loadgen"
-path = "src/bin/loadgen.rs"
-required-features = ["client"]
-```
-
-This tooling change does not edit the manifest. Its binary uses Tokio's multithreaded runtime, which the existing default `server` feature enables. Build with default features enabled, or explicitly enable both `server` and `client`.
+The manifest registers `loadgen` with required features `server` and `client`; the server feature enables Tokio's multithreaded runtime. Build with default features enabled and add `maud` for the HTML workload.
 
 Run from the repository root:
 
 ```sh
-export RUSTUP_HOME=/home/dev/switchboard-worktrees/rust-implementation/.tmp/rustup
-export CARGO_HOME=/home/dev/switchboard-worktrees/rust-implementation/.tmp/cargo
-export PATH="$CARGO_HOME/bin:$PATH"
-export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_TARGET_DIR="$PWD/.tmp/bench-target"
 cargo build --manifest-path rust/Cargo.toml --release --features maud --bin bench-server --bin loadgen
 bun rust/bench/run.ts \
@@ -72,7 +59,7 @@ bun rust/bench/run.ts \
   --output .tmp/rust-bench.ndjson
 ```
 
-The `bench-server` source and manifest registration are supplied by the integrating implementation. Do not substitute an echo server or router-only microbenchmark. Do not publish debug-build results as release measurements. The tool hashes executable bytes, but cannot infer compiler flags from an arbitrary binary; retain the exact build command with the artifact.
+`src/bin/bench-server.rs` exercises the public library pipeline. An echo server or router-only microbenchmark measures a different workload. Do not publish debug-build results as release measurements. The tool hashes executable bytes, but cannot infer compiler flags from an arbitrary binary; retain the exact build command with the artifact.
 
 `--candidate` and `--loadgen` are required. All other flags use the defaults in the example. Samples are bounded to 3..100, concurrency to 1..1024, durations to 1..300000ms and timeouts to 1..60000ms. Existing output files are rejected to preserve previous evidence. Progress is emitted on stderr. Raw records are written incrementally, including failure records, and flushed on exit. A failed run is not a comparative result.
 
@@ -100,7 +87,7 @@ Per-phase CPU is the server process's `/proc/<pid>/stat` user+system tick delta.
 
 This is closed-loop, fixed-concurrency loopback traffic on the same host. It measures complete tiny-response handler pipelines, not WAN, TLS, browser, router-only dispatch or isolated template rendering. Client CPU, response validation, server/client scheduling, cgroup CPU quotas, connection reuse, ephemeral ports, OS buffers and loopback bandwidth can bottleneck the result. Fixed concurrency does not model offered-load queue growth and has coordinated-omission limitations. Run concurrency sweeps and longer samples, inspect client/server CPU separately, isolate cores/hosts when appropriate, and preserve negative or inconclusive results. Alternating process order reduces order bias without eliminating shared-host noise or the fixed within-process workload ordering.
 
-Browser JS/WASM byte measurements remain an explicit pending artifact in the raw environment record. No browser byte advantage or Rust/Bun performance conclusion is claimed before real release-server measurements.
+Browser JS/WASM measurements are separate from the HTTP run, so the raw environment's `browserAssets` field remains marked pending. [The linked application measurement](../browser/README.md#linkable-demo-and-real-browser-proof) and [the integrated report](../VERIFICATION.md) contain the actual browser sizes and server results.
 
 ## Checks
 

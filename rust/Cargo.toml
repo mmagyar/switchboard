@@ -47,7 +47,11 @@ required-features = ["server", "maud"]
 
 [[bin]]
 name = "loadgen"
-required-features = ["client"]
+required-features = ["server", "client"]
+
+[[bin]]
+name = "compat-runner"
+required-features = ["server"]
 
 [profile.release]
 lto = "thin"

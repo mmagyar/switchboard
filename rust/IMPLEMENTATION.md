@@ -27,11 +27,11 @@ Shared definitions live in `lib.rs`:
 - `pub type Response = http::Response<axum::body::Body>`.
 - `pub type Handler = Arc<dyn Fn(Request, Option<String>) -> BoxFuture<'static, Response> + Send + Sync>`.
 - `Method` has Get, Post, Put, Patch, Delete, Head, Options; `as_str()`, `parse(&str) -> Result<Self, HttpError>`, `success_status() -> u16`, `has_body() -> bool`.
-- `HttpError { pub status: u16, pub message: String }`, constructors `new`, `not_found`, `unauthorized`, `forbidden`, `internal`; implements Display and Error.
+- `HttpError { pub status: u16, pub message: String, pub kind: ErrorKind }`, constructors `new`, `not_found`, `unauthorized`, `forbidden`, `internal`; implements Display and Error.
 - `DefinitionError(pub String)` implements Display and Error.
-- `RequestContext { pub method: Method, pub url: url::Url, pub headers: http::HeaderMap }`, cloneable; `from_request(&Request) -> Result<Self, HttpError>`. Missing absolute URI uses Host, default `localhost`, and http.
+- `RequestContext { pub method: Method, pub url: url::Url, pub headers: http::HeaderMap, pub uploads: Vec<UploadedFile> }`, cloneable; `from_request(&Request) -> Result<Self, HttpError>`. Missing absolute URI uses Host, default `localhost`, and http.
 - `RegisteredRoute { pub method: Method, pub path: String, pub prefixes: Vec<String>, pub handler: Handler }`.
-- `response(status: u16, content_type: &str, body: impl Into<Body>) -> Response`.
+- `response<T: Into<Body> + 'static>(status: u16, content_type: &str, body: T) -> Response`. Body identity is retained in response extensions for HTTP-only MIME inference; in-memory headers stay unchanged. `BodyKind::{Text,Binary}` and `Formatted::with_body` preserve identity through formatter body erasure.
 
 `Router::new()`, `Router::with_default(Handler)`, `add_route(&mut self, RegisteredRoute) -> Result<(), DefinitionError>`, `async handle_request(&self, Request) -> Response`. Router construction is mutable; dispatch is immutable and supports Arc sharing. Expose a route lookup method for router-only benchmarking. Preserve static-first fallback, optional trailing segments, duplicate/conflicting edge detection across methods, prefix rewriting, custom defaults, and HEAD behavior.
 
@@ -47,7 +47,7 @@ Shared definitions live in `lib.rs`:
 - `params::auto_schema(path: &str) -> Result<Schema, DefinitionError>`.
 - `params::validate_path(path: &str, schema: &Schema, prefixes: &[String]) -> Result<(), DefinitionError>`.
 - `params::parse_url(url: &Url, path: &str, schema: &Schema) -> Result<Value, ValidationError>`.
-- `params::coerce_form(schema: &Schema, value: Value) -> Value` (flat form bodies, nested query keys are handled separately).
+- `params::coerce_form(schema: &Schema, value: Value) -> Result<Value, ValidationError>` (flat form bodies, nested query keys are handled separately).
 - `params::def_to_url(path: &str, schema: &Schema, params: Value) -> Result<String, HttpError>`.
 
 Preserve path-over-query precedence, repeated values, dot keys and indexed arrays, both numeric ID conventions, optional-path truncation, URI encoding, empty-array omission and recursive number/boolean conversion. Preserve validation and transformation behavior through Rust equivalents. Sparse input must have a safe bounded representation; report any reference behavior that cannot be reproduced safely.

@@ -48,28 +48,34 @@ const run = async (command: string[], corpus: string, cases: readonly CompatCase
   return validateResults(stdout, cases);
 };
 
-export const check = async (command: string[]): Promise<number> => {
-  if (command.length === 0) throw new Error("Usage: bun rust/compat/check.ts <Rust runner executable> [arguments...]");
-  const corpus = await Bun.file(new URL("./cases.ndjson", import.meta.url)).text();
-  const cases = parseLines(corpus, caseSchema);
-  if (cases.length === 0 || new Set(cases.map((input) => input.id)).size !== cases.length) throw new Error("Corpus must contain cases with unique ids");
+export const check = async (command: string[], portableOnly = false): Promise<number> => {
+  if (command.length === 0) throw new Error("Usage: bun rust/compat/check.ts [--portable-only] <Rust runner executable> [arguments...]");
+  const source = await Bun.file(new URL("./cases.ndjson", import.meta.url)).text();
+  const allCases = parseLines(source, caseSchema);
+  if (allCases.length === 0 || new Set(allCases.map((input) => input.id)).size !== allCases.length) throw new Error("Corpus must contain cases with unique ids");
+  const excluded = portableOnly ? allCases.filter((input) => input.id === "method-unsupported" && input.kind === "http" && input.requests.every((request) => request.method === "BREW")) : [];
+  const cases = allCases.filter((input) => !excluded.includes(input));
+  const corpus = portableOnly ? `${cases.map((input) => JSON.stringify(input)).join("\n")}\n` : source;
+  const scope = portableOnly ? { excludedRuntimeCases: excluded.map((input) => input.id) } : {};
   try {
     const reference = await run([process.execPath, new URL("./reference.ts", import.meta.url).pathname], corpus, cases);
     const candidate = await run(command, corpus, cases);
     const mismatches = compareResults(reference, candidate);
     for (const mismatch of mismatches) console.error(mismatch);
-    console.log(JSON.stringify({ cases: cases.length, mismatches: mismatches.length }));
+    console.log(JSON.stringify({ cases: cases.length, mismatches: mismatches.length, ...scope }));
     return mismatches.length === 0 ? 0 : 1;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.log(JSON.stringify({ cases: cases.length, mismatches: cases.length, runnerFailures: 1 }));
+    console.log(JSON.stringify({ cases: cases.length, mismatches: cases.length, runnerFailures: 1, ...scope }));
     return 1;
   }
 };
 
 if (import.meta.main) {
   try {
-    process.exitCode = await check(process.argv.slice(2));
+    const args = process.argv.slice(2);
+    const portableOnly = args[0] === "--portable-only";
+    process.exitCode = await check(portableOnly ? args.slice(1) : args, portableOnly);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

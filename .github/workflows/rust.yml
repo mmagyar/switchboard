@@ -1,0 +1,85 @@
+name: Rust
+
+on:
+  push:
+    branches: [main]
+    paths: ["rust/**", ".github/workflows/rust.yml"]
+  pull_request:
+    branches: [main]
+    paths: ["rust/**", ".github/workflows/rust.yml"]
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.1"
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust -> target
+            rust/browser -> target
+            rust/macros -> target
+            rust/typecheck -> target
+            rust/browser/examples/demo -> target
+      - run: bun install --frozen-lockfile
+      - run: bun run check && bunx tsc -p rust/compat/tsconfig.json && bunx tsc -p rust/compat/schema/tsconfig.json && bunx tsc -p rust/bench/tsconfig.json && bun test
+      - run: cargo fmt --manifest-path rust/Cargo.toml --check
+      - run: cargo check --manifest-path rust/Cargo.toml --all-features --locked
+      - run: cargo test --manifest-path rust/Cargo.toml --all-features --locked
+      - run: cargo clippy --manifest-path rust/Cargo.toml --all-features --all-targets --locked -- -D warnings
+      - run: cargo check --manifest-path rust/Cargo.toml --no-default-features --locked
+      - run: cargo check --manifest-path rust/Cargo.toml --no-default-features --features client --locked
+      - run: cargo check --manifest-path rust/Cargo.toml --no-default-features --features server --locked
+      - run: cargo check --manifest-path rust/typecheck/Cargo.toml --locked
+      - run: cargo test --manifest-path rust/macros/Cargo.toml --locked
+      - run: cargo test --manifest-path rust/browser/Cargo.toml --locked
+      - run: cargo check --manifest-path rust/Cargo.toml --no-default-features --target wasm32-unknown-unknown --lib --locked
+      - run: cargo check --manifest-path rust/browser/Cargo.toml --target wasm32-unknown-unknown --locked
+      - name: Portable HTTP compatibility, with runtime exclusion reported
+        run: |
+          cargo build --manifest-path rust/Cargo.toml --all-features --bin compat-runner --locked
+          bun rust/compat/check.ts --portable-only ./rust/target/debug/compat-runner
+      - name: Strict schema and parameter compatibility plus explicit bounds
+        run: |
+          cargo build --manifest-path rust/Cargo.toml --bin schema-runner --locked
+          bun rust/compat/schema/check.ts .tmp/schema-ci ./rust/target/debug/schema-runner
+          bun rust/compat/schema/bounds.ts .tmp/schema-ci ./rust/target/debug/schema-runner
+      - name: Build and verify the linked Rust WASM application
+        run: |
+          mkdir -p .tmp
+          curl --fail --location --output .tmp/wasm-bindgen.tar.gz https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz
+          tar --extract --gzip --file .tmp/wasm-bindgen.tar.gz --directory .tmp
+          bun install --cwd rust/browser --frozen-lockfile
+          bun rust/browser/node_modules/playwright-core/cli.js install --with-deps chromium
+          cargo build --manifest-path rust/browser/examples/demo/Cargo.toml --release --target wasm32-unknown-unknown --lib --locked
+          .tmp/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen --target web --out-dir rust/browser/examples/demo/static/generated --out-name demo rust/browser/examples/demo/target/wasm32-unknown-unknown/release/switchboard_browser_demo.wasm
+          cargo build --manifest-path rust/browser/examples/demo/Cargo.toml --features server --bin browser-demo-server --locked
+          bunx tsc --ignoreConfig --noEmit --strict --skipLibCheck --target ESNext --module ESNext --moduleResolution bundler --allowImportingTsExtensions --types bun rust/browser/integration.ts rust/browser/reference.ts rust/browser/measure.ts
+          bun rust/browser/measure.ts
+          bun rust/browser/integration.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rust-browser-and-schema-evidence
+          path: |
+            .tmp/browser/
+            .tmp/schema-ci/
+
+  minimum-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.85.1"
+          targets: wasm32-unknown-unknown
+      - run: cargo check --manifest-path rust/Cargo.toml --all-features --all-targets --locked
+      - run: cargo check --manifest-path rust/browser/Cargo.toml --target wasm32-unknown-unknown --locked

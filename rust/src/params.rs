@@ -439,6 +439,10 @@ fn parse_coerced(schema: &Schema, input: Input) -> Result<Value, ValidationError
         .ok_or_else(|| ValidationError::custom("Params schema returned undefined"))
 }
 
+pub(crate) fn parse_form_input(schema: &Schema, input: Input) -> Result<Value, ValidationError> {
+    parse_coerced(schema, input)
+}
+
 pub fn parse_form(schema: &Schema, value: Value) -> Result<Value, ValidationError> {
     parse_coerced(schema, Input::from_value(value))
 }

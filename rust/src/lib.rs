@@ -153,10 +153,19 @@ impl fmt::Display for DefinitionError {
 impl std::error::Error for DefinitionError {}
 
 #[derive(Clone, Debug)]
+pub struct UploadedFile {
+    pub field_name: String,
+    pub filename: String,
+    pub content_type: Option<String>,
+    pub data: bytes::Bytes,
+}
+
+#[derive(Clone, Debug)]
 pub struct RequestContext {
     pub method: Method,
     pub url: Url,
     pub headers: HeaderMap,
+    pub uploads: Vec<UploadedFile>,
 }
 impl RequestContext {
     pub fn from_request(request: &Request) -> Result<Self, HttpError> {
@@ -176,6 +185,7 @@ impl RequestContext {
             method: Method::parse(request.method().as_str())?,
             url,
             headers: request.headers().clone(),
+            uploads: Vec::new(),
         })
     }
 }

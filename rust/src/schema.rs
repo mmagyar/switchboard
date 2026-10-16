@@ -15,6 +15,7 @@ pub enum Schema {
     String,
     Number,
     Boolean,
+    File,
     Literal(Value),
     Enum(Vec<String>),
     Object(IndexMap<String, Schema>),
@@ -98,6 +99,7 @@ impl std::error::Error for ValidationError {}
 pub(crate) enum Input {
     Absent,
     Promise,
+    Blob,
     Scalar(Value),
     NonFinite { original: String },
     Object(IndexMap<String, Input>),
@@ -121,7 +123,7 @@ impl Input {
     pub(crate) fn to_value(&self) -> Option<Value> {
         match self {
             Self::Absent => None,
-            Self::Promise => Some(json!({})),
+            Self::Promise | Self::Blob => Some(json!({})),
             Self::Scalar(value) => Some(value.clone()),
             Self::NonFinite { .. } => Some(Value::Null),
             Self::Object(fields) => Some(Value::Object(
@@ -143,6 +145,7 @@ impl Input {
         match self {
             Self::Absent => "undefined",
             Self::Promise => "Promise",
+            Self::Blob => "Blob",
             Self::Scalar(Value::Null) => "null",
             Self::Scalar(Value::Bool(_)) => "boolean",
             Self::Scalar(Value::Number(_)) | Self::NonFinite { .. } => "number",
@@ -247,6 +250,8 @@ impl Schema {
             Self::Boolean if matches!(input, Input::Scalar(Value::Bool(_))) => {
                 Ok(Parsed::new(input.to_value()))
             }
+            Self::File if matches!(input, Input::Blob) => Ok(Parsed::new(Some(json!({})))),
+            Self::File => Err(invalid_type("file", input, path)),
             Self::String => Err(invalid_type("string", input, path)),
             Self::Number => Err(invalid_type("number", input, path)),
             Self::Integer { signed, bits } => parse_integer(input, *signed, *bits)
@@ -254,14 +259,16 @@ impl Schema {
                 .map_err(|e| e.at(path)),
             Self::Boolean => Err(invalid_type("boolean", input, path)),
             Self::Literal(expected) => {
-                if !matches!(input, Input::NonFinite { .. } | Input::Promise)
-                    && input
-                        .to_value()
-                        .as_ref()
-                        .is_some_and(|actual| match (actual, expected) {
-                            (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
-                            _ => actual == expected,
-                        })
+                if !matches!(
+                    input,
+                    Input::NonFinite { .. } | Input::Promise | Input::Blob
+                ) && input
+                    .to_value()
+                    .as_ref()
+                    .is_some_and(|actual| match (actual, expected) {
+                        (Value::Number(a), Value::Number(b)) => a.as_f64() == b.as_f64(),
+                        _ => actual == expected,
+                    })
                 {
                     Ok(Parsed::new(input.to_value()))
                 } else {
@@ -282,7 +289,7 @@ impl Schema {
                 let empty = IndexMap::new();
                 let fields = match input {
                     Input::Object(fields) => fields,
-                    Input::Promise => &empty,
+                    Input::Promise | Input::Blob => &empty,
                     _ => return Err(invalid_type("object", input, path)),
                 };
                 let mut output = serde_json::Map::new();
@@ -539,6 +546,7 @@ impl Schema {
             Self::String => "ZodString",
             Self::Number | Self::Integer { .. } => "ZodNumber",
             Self::Boolean => "ZodBoolean",
+            Self::File => "ZodFile",
             Self::Enum(_) => "ZodEnum",
             Self::Literal(_) => "ZodLiteral",
             Self::Optional(_) => "ZodOptional",
@@ -1004,6 +1012,28 @@ mod tests {
             assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
         }
         assert!(serde_json::from_value::<Schema>(json!({"type":"number","value":false})).is_err());
+    }
+
+    #[test]
+    fn uploaded_files_keep_blob_validation_identity() {
+        assert_eq!(
+            Schema::File.parse_input(&Input::Blob).unwrap(),
+            Some(json!({}))
+        );
+        assert_eq!(
+            Schema::String.parse_input(&Input::Blob).unwrap_err().issues[0]["message"],
+            "Invalid input: expected string, received Blob"
+        );
+        assert_eq!(
+            Schema::Object(IndexMap::new())
+                .parse_input(&Input::Blob)
+                .unwrap(),
+            Some(json!({}))
+        );
+        assert_eq!(
+            Schema::File.parse_value(json!({})).unwrap_err().issues[0]["message"],
+            "Invalid input: expected file, received object"
+        );
     }
 
     #[test]

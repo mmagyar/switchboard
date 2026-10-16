@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, sync::Arc};
 use url::Url;
 
+pub mod params;
 pub mod router;
+pub mod schema;
 pub use router::Router;
+pub use schema::{Schema, ValidationError};
 #[cfg(feature = "maud")]
 pub mod render;
 

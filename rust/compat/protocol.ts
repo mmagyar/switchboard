@@ -3,7 +3,7 @@ import { z } from "zod";
 export const jsonSchema = z.json();
 export type Json = z.infer<typeof jsonSchema>;
 
-type UnitSchema = { type: "unknown" | "string" | "number" | "boolean" };
+type UnitSchema = { type: "unknown" | "string" | "number" | "boolean" | "file" };
 export type SchemaDsl =
   | UnitSchema
   | { type: "literal"; value: Json }
@@ -15,7 +15,7 @@ export type SchemaDsl =
 
 export const schemaDslSchema: z.ZodType<SchemaDsl> = z.lazy(() =>
   z.discriminatedUnion("type", [
-    z.strictObject({ type: z.enum(["unknown", "string", "number", "boolean"]) }),
+    z.strictObject({ type: z.enum(["unknown", "string", "number", "boolean", "file"]) }),
     z.strictObject({ type: z.literal("literal"), value: jsonSchema }),
     z.strictObject({ type: z.literal("enum"), value: z.array(z.string()).min(1) }),
     z.strictObject({ type: z.literal("object"), value: z.record(z.string(), schemaDslSchema) }),

@@ -29,6 +29,7 @@ Schemas use Rust's adjacently tagged representation, with `type` and `value` key
 {"type":"string"}
 {"type":"number"}
 {"type":"boolean"}
+{"type":"file"}
 {"type":"literal","value":"fixed"}
 {"type":"enum","value":["red","blue"]}
 {"type":"object","value":{"id":{"type":"number"}}}
@@ -80,7 +81,7 @@ Success examples:
 
 Application headers are lowercase and sorted lexicographically by name, then value. Only `date`, `connection`, `keep-alive` are ignored as transport metadata. Content type and length, custom headers, cookies, location and all other headers remain. Body is parsed as JSON only if content-type contains `json` and bytes are nonempty. Empty JSON responses (HEAD) use `{type:"text",value:""}`. JSON string error bodies retain their string type. Non-JSON bodies are exact UTF-8 strings.
 
-Each warning is `{message,issues,data,method,url}` with the complete Zod error message and complete issue array, original invalid data, lowercase method and effective request URL (rewritten for prefixes, suffixed with `#field` for formatter property validation). The runner drains all fixture futures and background validation microtasks before taking its warning snapshot. Warning order is observable.
+Each warning is `{message,issues,data,method,url}` with the complete Zod error message and complete issue array, JSON.stringify snapshot of the original invalid data (nested Promises and Files become `{}`), lowercase method and effective request URL (rewritten for prefixes, suffixed with `#field` for formatter property validation). The runner drains all fixture futures and background validation microtasks before taking its warning snapshot. Warning order is observable.
 
 `errors` captures each call to the configured error logger as a JSON-encoded string of its arguments. Error objects are represented as `{name,message}`. Stack traces are excluded at this logging boundary because they describe runner locations, not product behavior. All other arguments are retained as JSON. No validation or response strings are normalized. Production verbose stacks are disabled explicitly in both processes.
 

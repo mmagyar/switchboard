@@ -7,12 +7,31 @@ use serde::{Deserialize, Serialize};
 use std::{fmt, sync::Arc};
 use url::Url;
 
+#[cfg(test)]
+mod contract_tests;
 pub mod params;
 pub mod router;
 pub mod schema;
 pub use router::Router;
 pub use schema::{Schema, ValidationError};
+#[cfg(feature = "client")]
+pub mod client;
+pub mod handler;
+#[cfg(feature = "client")]
+pub use client::{
+    ApiClient, ApiError, ApiErrorKind, CallSettings, ClientError, ClientOptions,
+    INVALID_RESPONSE_STATUS, NETWORK_ERROR_STATUS,
+};
+pub use switchboard_macros::route;
+#[doc(hidden)]
+pub mod __private {
+    pub use schemars;
+    pub use serde;
+}
 pub mod json;
+pub use handler::{
+    Authorization, DeferredValue, Formatted, HandlerDefiner, HandlerOptions, RouteDef, TypedRoute,
+};
 #[cfg(feature = "server")]
 pub mod logger;
 #[cfg(feature = "maud")]

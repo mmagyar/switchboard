@@ -36,9 +36,18 @@ notify = { version = "8", optional = true }
 tracing = { version = "0.1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "cookies"], optional = true }
 maud = { version = "0.27", optional = true }
+switchboard-macros = { path = "macros", version = "0.2.0" }
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "bench-server"
+required-features = ["server", "maud"]
+
+[[bin]]
+name = "loadgen"
+required-features = ["client"]
 
 [profile.release]
 lto = "thin"

@@ -27,7 +27,7 @@ const invokeCheck = async (args: string[]): Promise<{ code: number; stdout: stri
 
 describe("compat corpus and reference", () => {
   test("all cases produce validated independent results", async () => {
-    expect(cases.length).toBe(90);
+    expect(cases.length).toBe(94);
     expect(new Set(cases.map((input) => input.id)).size).toBe(cases.length);
     for (const input of cases) {
       const result = resultSchema.parse(await runCase(input));
@@ -122,7 +122,7 @@ describe("compat differential checker", () => {
 
   test("CLI executes both processes and reports all shared cases", async () => {
     const result = await invokeCheck([Bun.which("bun") ?? "bun", new URL("./reference.ts", import.meta.url).pathname]);
-    expect(result).toEqual({ code: 0, stdout: '{"cases":90,"mismatches":0}\n', stderr: "" });
+    expect(result).toEqual({ code: 0, stdout: '{"cases":94,"mismatches":0}\n', stderr: "" });
   });
 
   test("CLI reports a semantic mismatch with complete validation text", async () => {
@@ -139,7 +139,7 @@ describe("compat differential checker", () => {
     `;
     const result = await invokeCheck([Bun.which("bun") ?? "bun", "-e", script]);
     expect(result.code).toBe(1);
-    expect(result.stdout).toBe('{"cases":90,"mismatches":1}\n');
+    expect(result.stdout).toBe('{"cases":94,"mismatches":1}\n');
     expect(result.stderr).toContain("received number");
     expect(result.stderr).toContain("received boolean");
     expect(result.stderr).toContain("Invalid input: expected string");
@@ -151,12 +151,12 @@ describe("compat differential checker", () => {
     const invalid = await invokeCheck([Bun.which("bun") ?? "bun", "-e", 'await Bun.stdin.text(); console.log("{}");']);
     expect(invalid.code).toBe(1);
     expect(invalid.stderr).toContain("Invalid NDJSON record 1");
-    expect(invalid.stdout).toBe('{"cases":90,"mismatches":90,"runnerFailures":1}\n');
+    expect(invalid.stdout).toBe('{"cases":94,"mismatches":94,"runnerFailures":1}\n');
     const crash = await invokeCheck([Bun.which("bun") ?? "bun", "-e", "await Bun.stdin.text(); process.exit(7);"]);
     expect(crash.code).toBe(1);
     expect(crash.stderr).toContain("exited 7");
     const missing = await invokeCheck([Bun.which("bun") ?? "bun", "-e", "await Bun.stdin.text();"]);
     expect(missing.code).toBe(1);
-    expect(missing.stderr).toContain("Expected 90 results, received 0");
+    expect(missing.stderr).toContain("Expected 94 results, received 0");
   });
 });

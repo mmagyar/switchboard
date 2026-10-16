@@ -497,7 +497,19 @@ mod tests {
             let server = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut buffer = [0; 4096];
-                socket.read(&mut buffer).await.unwrap();
+                let mut request = Vec::new();
+                loop {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert!(count > 0, "peer closed before request headers");
+                    request.extend_from_slice(&buffer[..count]);
+                    assert!(
+                        request.len() <= 4096,
+                        "unexpected oversized fixture request"
+                    );
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
                 let response = format!(
                     "HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()

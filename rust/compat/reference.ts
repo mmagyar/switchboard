@@ -11,6 +11,7 @@ export const toZod = (schema: SchemaDsl): z.ZodType => {
     case "string": return z.string();
     case "number": return z.number();
     case "boolean": return z.boolean();
+    case "file": return z.file();
     case "literal": {
       if (schema.value !== null && typeof schema.value === "object") throw new Error("Protocol literal must be a JSON primitive");
       return z.literal(schema.value);
@@ -99,6 +100,12 @@ const logArgument = (value: unknown): Json => {
   return jsonSchema.parse(value);
 };
 
+const warningData = (value: unknown): Json => {
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) throw new Error("Warning data is absent and cannot be encoded by protocol v1");
+  return jsonSchema.parse(JSON.parse(serialized));
+};
+
 export const runCase = async (input: CompatCase): Promise<CompatResult> => {
   const warnings: Warning[] = [];
   const errors: string[] = [];
@@ -106,7 +113,7 @@ export const runCase = async (input: CompatCase): Promise<CompatResult> => {
   try {
     const options: RouteHandlerOptions<Json> = {
       outputErrorWarning: (error, data, method, url) => warnings.push({
-        message: error.message, issues: z.array(jsonSchema).parse(error.issues), data: jsonSchema.parse(data), method, url,
+        message: error.message, issues: z.array(jsonSchema).parse(error.issues), data: warningData(data), method, url,
       }),
       errorLogger: (...args) => errors.push(JSON.stringify(args.map(logArgument))),
       ...(input.kind === "http" && input.errorParser ? { errorParser: async () => input.errorParser } : {}),

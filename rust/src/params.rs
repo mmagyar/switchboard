@@ -4,6 +4,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
+use std::cell::Cell;
 use url::Url;
 
 // Bound both each sparse index and the sum of allocations, including nested sparse arrays.
@@ -70,7 +71,7 @@ pub fn validate_path(
 ) -> Result<(), DefinitionError> {
     let params = path_params(path)?;
     if !params.is_empty() {
-        let Schema::Object(fields) = schema else {
+        let (Schema::Object(fields) | Schema::OpenObject(fields, _)) = schema else {
             return Err(DefinitionError(format!(
                 "Route \"{path}\" has path params [{}] but paramsValidation is not a ZodObject",
                 params
@@ -319,15 +320,60 @@ fn js_number(value: &str) -> Option<Input> {
     }
 }
 
-fn converted(schema: &Schema, input: &Input, conversion: Conversion) -> Option<Input> {
+fn converted(
+    schema: &Schema,
+    input: &Input,
+    conversion: Conversion,
+) -> Result<Option<Input>, ValidationError> {
+    let remaining = Cell::new(65_536);
+    let failure = Cell::new(None);
+    let value = converted_at(schema, input, conversion, 0, &remaining, &failure);
+    match failure.get() {
+        Some(message) => Err(ValidationError::custom(message)),
+        None => Ok(value),
+    }
+}
+
+fn converted_at(
+    schema: &Schema,
+    input: &Input,
+    conversion: Conversion,
+    depth: usize,
+    remaining: &Cell<usize>,
+    failure: &Cell<Option<&'static str>>,
+) -> Option<Input> {
+    if failure.get().is_some() {
+        return None;
+    }
+    if depth > 128 {
+        failure.set(Some("Schema coercion nesting exceeds 128 levels"));
+        return None;
+    }
+    if remaining.get() == 0 {
+        failure.set(Some("Schema coercion exceeds 65536 nodes"));
+        return None;
+    }
+    remaining.set(remaining.get() - 1);
     let schema = coercion_schema(schema);
     if matches!(input, Input::Absent) {
         return None;
     }
+    if let Schema::Lazy(reference) = schema {
+        return converted_at(
+            &reference.resolve(),
+            input,
+            conversion,
+            depth + 1,
+            remaining,
+            failure,
+        );
+    }
     if let Schema::Union(branches) = schema {
         let mut result = None;
         for branch in branches {
-            if let Some(value) = converted(branch, input, conversion) {
+            if let Some(value) =
+                converted_at(branch, input, conversion, depth + 1, remaining, failure)
+            {
                 // unionHandler drops scalar false and zero because it tests JavaScript truthiness.
                 if matches!(&value, Input::Scalar(Value::Bool(false)))
                     || matches!(&value, Input::Scalar(Value::Number(n)) if n.as_f64() == Some(0.0))
@@ -361,7 +407,9 @@ fn converted(schema: &Schema, input: &Input, conversion: Conversion) -> Option<I
             // The Bun reference filters unconverted entries before merging them back by index.
             let values = items
                 .iter()
-                .filter_map(|item| converted(element, item, conversion))
+                .filter_map(|item| {
+                    converted_at(element, item, conversion, depth + 1, remaining, failure)
+                })
                 .collect::<Vec<_>>();
             if values.is_empty() {
                 None
@@ -369,13 +417,15 @@ fn converted(schema: &Schema, input: &Input, conversion: Conversion) -> Option<I
                 Some(Input::Array(values))
             }
         }
-        (Schema::Object(shape), Input::Object(fields)) => {
+        (Schema::Object(shape) | Schema::OpenObject(shape, _), Input::Object(fields)) => {
             let values = shape
                 .iter()
                 .filter_map(|(key, schema)| {
                     fields
                         .get(key)
-                        .and_then(|value| converted(schema, value, conversion))
+                        .and_then(|value| {
+                            converted_at(schema, value, conversion, depth + 1, remaining, failure)
+                        })
                         .map(|v| (key.clone(), v))
                 })
                 .collect::<IndexMap<_, _>>();
@@ -420,22 +470,22 @@ fn overlay_conversion(base: Input, replacement: Input, replace_arrays: bool) -> 
     }
 }
 
-fn coerce_input(schema: &Schema, input: Input) -> Input {
+fn coerce_input(schema: &Schema, input: Input) -> Result<Input, ValidationError> {
     let mut output = input;
     for conversion in [Conversion::Number, Conversion::Boolean] {
         // Body/query parsing merges only object and array conversion results, never root scalars.
         if let Some(value @ (Input::Object(_) | Input::Array(_))) =
-            converted(schema, &output, conversion)
+            converted(schema, &output, conversion)?
         {
             output = overlay_conversion(output, value, false);
         }
     }
-    output
+    Ok(output)
 }
 
 fn parse_coerced(schema: &Schema, input: Input) -> Result<Value, ValidationError> {
     schema
-        .parse_input(&coerce_input(schema, input))?
+        .parse_input(&coerce_input(schema, input)?)?
         .ok_or_else(|| ValidationError::custom("Params schema returned undefined"))
 }
 
@@ -448,7 +498,7 @@ pub fn parse_form(schema: &Schema, value: Value) -> Result<Value, ValidationErro
 }
 
 // JSON cannot carry non-finite numbers. HTTP validation must use parse_form, not this lossy utility.
-pub fn coerce_form(schema: &Schema, value: Value) -> Value {
+pub fn coerce_form(schema: &Schema, value: Value) -> Result<Value, ValidationError> {
     fn restore_nonfinite(input: Input) -> Input {
         match input {
             Input::NonFinite { original, .. } => Input::Scalar(Value::String(original)),
@@ -462,9 +512,11 @@ pub fn coerce_form(schema: &Schema, value: Value) -> Value {
             other => other,
         }
     }
-    restore_nonfinite(coerce_input(schema, Input::from_value(value)))
-        .to_value()
-        .unwrap_or(Value::Null)
+    Ok(
+        restore_nonfinite(coerce_input(schema, Input::from_value(value))?)
+            .to_value()
+            .unwrap_or(Value::Null),
+    )
 }
 
 fn js_string(value: &Value) -> String {
@@ -871,7 +923,8 @@ mod tests {
             coerce_form(
                 &schema,
                 json!({"id":"1","rows":[{"numbers":["2","3.5"],"flag":"false"}],"ignored":"4"})
-            ),
+            )
+            .unwrap(),
             json!({"id":1,"rows":[{"numbers":[2,3.5],"flag":false}],"ignored":"4"})
         );
     }
@@ -891,14 +944,14 @@ mod tests {
             ("-0", json!(0)),
         ] {
             assert_eq!(
-                coerce_form(&schema, json!({"n":input})),
+                coerce_form(&schema, json!({"n":input})).unwrap(),
                 json!({"n":expected}),
                 "{input}"
             );
         }
         for input in ["", "abc", "1_2", "NaN", "0x", "+0x1", "inf"] {
             assert_eq!(
-                coerce_form(&schema, json!({"n":input})),
+                coerce_form(&schema, json!({"n":input})).unwrap(),
                 json!({"n":input}),
                 "{input}"
             );
@@ -909,7 +962,10 @@ mod tests {
     fn number_coercion_uses_ecmascript_whitespace_not_unicode_whitespace() {
         let schema = object([("n", Schema::Number)]);
         for input in ["\u{0085}", "\u{0085}2\u{0085}", "\u{180e}"] {
-            assert_eq!(coerce_form(&schema, json!({"n":input})), json!({"n":input}));
+            assert_eq!(
+                coerce_form(&schema, json!({"n":input})).unwrap(),
+                json!({"n":input})
+            );
         }
         for input in ["\u{feff}", "\u{2000}2\u{2029}", "\u{00a0}2\u{3000}"] {
             assert!(parse_form(&schema, json!({"n":input})).is_ok());
@@ -958,7 +1014,7 @@ mod tests {
             ("", json!("")),
         ] {
             assert_eq!(
-                coerce_form(&schema, json!({"flag":input})),
+                coerce_form(&schema, json!({"flag":input})).unwrap(),
                 json!({"flag":expected})
             );
         }
@@ -982,7 +1038,7 @@ mod tests {
         ]);
         let input = json!({"optional":"1","readonly":"false","default":"3","nullable":"4","catch":"true","transform":"5"});
         assert_eq!(
-            coerce_form(&schema, input),
+            coerce_form(&schema, input).unwrap(),
             json!({"optional":1,"readonly":false,"default":"3","nullable":"4","catch":"true","transform":"5"})
         );
     }
@@ -993,14 +1049,16 @@ mod tests {
             coerce_form(
                 &object([("a", array(Schema::Number))]),
                 json!({"a":["bad","2","3"]})
-            ),
+            )
+            .unwrap(),
             json!({"a":[2,3,"3"]})
         );
         assert_eq!(
             coerce_form(
                 &object([("a", array(Schema::Boolean))]),
                 json!({"a":["bad","false","true"]})
-            ),
+            )
+            .unwrap(),
             json!({"a":[false,true,"true"]})
         );
         let error = parse(
@@ -1022,19 +1080,25 @@ mod tests {
             "v",
             Schema::Union(vec![Schema::Number, object([("x", Schema::String)])]),
         )]);
-        assert_eq!(coerce_form(&number, json!({"v":"2"})), json!({"v":2}));
-        assert_eq!(coerce_form(&number, json!({"v":"0"})), json!({"v":"0"}));
+        assert_eq!(
+            coerce_form(&number, json!({"v":"2"})).unwrap(),
+            json!({"v":2})
+        );
+        assert_eq!(
+            coerce_form(&number, json!({"v":"0"})).unwrap(),
+            json!({"v":"0"})
+        );
         assert!(parse("/", &number, "http://x/?v=0").is_err());
         let boolean = object([(
             "v",
             Schema::Union(vec![Schema::Boolean, object([("x", Schema::String)])]),
         )]);
         assert_eq!(
-            coerce_form(&boolean, json!({"v":"true"})),
+            coerce_form(&boolean, json!({"v":"true"})).unwrap(),
             json!({"v":true})
         );
         assert_eq!(
-            coerce_form(&boolean, json!({"v":"false"})),
+            coerce_form(&boolean, json!({"v":"false"})).unwrap(),
             json!({"v":"false"})
         );
     }
@@ -1065,7 +1129,7 @@ mod tests {
         assert_eq!(error.issues[0]["errors"][1][0]["code"], "invalid_value");
         let lossy = object([("n", Schema::Number)]);
         assert_eq!(
-            coerce_form(&lossy, json!({"n":"Infinity"})),
+            coerce_form(&lossy, json!({"n":"Infinity"})).unwrap(),
             json!({"n":"Infinity"})
         );
         assert_eq!(
@@ -1078,11 +1142,17 @@ mod tests {
 
     #[test]
     fn flat_form_coercion_does_not_expand_dots_or_convert_root_scalars() {
-        assert_eq!(coerce_form(&Schema::Number, json!("3")), json!("3"));
-        let schema = object([("a", object([("n", Schema::Number)]))]);
-        assert_eq!(coerce_form(&schema, json!({"a.n":"3"})), json!({"a.n":"3"}));
         assert_eq!(
-            coerce_form(&array(Schema::Number), json!(["1", "2"])),
+            coerce_form(&Schema::Number, json!("3")).unwrap(),
+            json!("3")
+        );
+        let schema = object([("a", object([("n", Schema::Number)]))]);
+        assert_eq!(
+            coerce_form(&schema, json!({"a.n":"3"})).unwrap(),
+            json!({"a.n":"3"})
+        );
+        assert_eq!(
+            coerce_form(&array(Schema::Number), json!(["1", "2"])).unwrap(),
             json!([1, 2])
         );
     }
@@ -1105,6 +1175,149 @@ mod tests {
                 ready: false,
                 tags: vec!["a".into(), "b".into()]
             }
+        );
+    }
+
+    #[derive(schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+    struct ContainerParams {
+        map: std::collections::BTreeMap<String, String>,
+        tuple: (String, String),
+    }
+
+    #[test]
+    fn derived_map_and_tuple_url_roundtrip_preserves_string_values() {
+        let schema = Schema::from_type::<ContainerParams>().unwrap();
+        let value = json!({"map":{"a":"hello world","b":"1"},"tuple":["yes","true"]});
+        let generated = def_to_url("/search", &schema, value.clone()).unwrap();
+        assert_eq!(
+            generated,
+            "/search?map.a=hello+world&map.b=1&tuple.0=yes&tuple.1=true"
+        );
+        let parsed = parse("/search", &schema, &format!("http://x{generated}")).unwrap();
+        assert_eq!(parsed, value);
+        let typed: ContainerParams = serde_json::from_value(parsed).unwrap();
+        assert_eq!(typed.map["a"], "hello world");
+        assert_eq!(typed.tuple, ("yes".into(), "true".into()));
+    }
+
+    #[test]
+    fn record_and_tuple_query_values_are_not_precoerced() {
+        let schema = object([
+            ("record", Schema::Record(Box::new(Schema::Number))),
+            (
+                "tuple",
+                Schema::Tuple(vec![Schema::Number, Schema::Boolean]),
+            ),
+        ]);
+        let input = json!({"record":{"n":"2"},"tuple":["3","false"]});
+        assert_eq!(coerce_form(&schema, input.clone()).unwrap(), input);
+        let error =
+            parse("/", &schema, "http://x/?record.n=2&tuple.0=3&tuple.1=false").unwrap_err();
+        assert_eq!(
+            error.issues,
+            vec![
+                json!({"expected":"number","code":"invalid_type","path":["record","n"],"message":"Invalid input: expected number, received string"}),
+                json!({"expected":"number","code":"invalid_type","path":["tuple",0],"message":"Invalid input: expected number, received string"}),
+                json!({"expected":"boolean","code":"invalid_type","path":["tuple",1],"message":"Invalid input: expected boolean, received string"}),
+            ]
+        );
+        assert_eq!(
+            parse_form(&schema, json!({"record":{"n":2},"tuple":[3,false]})).unwrap(),
+            json!({"record":{"n":2},"tuple":[3,false]})
+        );
+        assert_eq!(
+            def_to_url("/", &schema, json!({"record":{"n":2},"tuple":[3,false]})).unwrap(),
+            "?record.n=2&tuple.0=3&tuple.1=false"
+        );
+        let derived = Schema::from_type::<std::collections::BTreeMap<String, i32>>().unwrap();
+        assert_eq!(
+            coerce_form(&derived, json!({"n":"2"})).unwrap(),
+            json!({"n":"2"})
+        );
+        assert!(parse_form(&derived, json!({"n":"2"})).is_err());
+    }
+
+    #[derive(schemars::JsonSchema, serde::Deserialize)]
+    struct RecursiveQuery {
+        id: i32,
+        children: Vec<RecursiveQuery>,
+    }
+
+    #[test]
+    fn coercion_limits_are_explicit_errors_in_checked_and_utility_apis() {
+        let schema = Schema::Array(Box::new(Schema::Number));
+        let input = json!(vec!["1"; 65_536]);
+        for error in [
+            coerce_form(&schema, input.clone()).unwrap_err(),
+            parse_form(&schema, input).unwrap_err(),
+        ] {
+            assert_eq!(
+                error.issues[0]["message"],
+                "Schema coercion exceeds 65536 nodes"
+            );
+        }
+        let mut schema = Schema::Number;
+        let mut input = json!("1");
+        for _ in 0..130 {
+            schema = Schema::Array(Box::new(schema));
+            input = json!([input]);
+        }
+        assert_eq!(
+            coerce_form(&schema, input).unwrap_err().issues[0]["message"],
+            "Schema coercion nesting exceeds 128 levels"
+        );
+    }
+
+    #[test]
+    fn generated_references_keep_object_array_coercion_and_path_validation() {
+        let schema = Schema::from_type::<RecursiveQuery>().unwrap();
+        validate_path("/:id", &schema, &[]).unwrap();
+        let parsed = parse(
+            "/:id",
+            &schema,
+            "http://x/2?children.0.id=3&children.0.children.0.id=4&children.0.children.0.children=",
+        );
+        // URL strings cannot encode an empty array. JSON/form input can preserve one.
+        assert_eq!(
+            parsed.unwrap_err().issues[0]["path"],
+            json!(["children", 0, "children", 0, "children"])
+        );
+        let value = parse_form(
+            &schema,
+            json!({"id":"2","children":[{"id":"3","children":[]}]}),
+        )
+        .unwrap();
+        let typed: RecursiveQuery = serde_json::from_value(value).unwrap();
+        assert_eq!(typed.id, 2);
+        assert_eq!(typed.children[0].id, 3);
+        assert!(typed.children[0].children.is_empty());
+    }
+
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct OpenQuery {
+        id: i32,
+        #[serde(flatten)]
+        extra: std::collections::BTreeMap<String, i32>,
+    }
+
+    #[test]
+    fn open_object_coercion_visits_declared_shape_without_inventing_catchall_conversion() {
+        let schema = Schema::from_type::<OpenQuery>().unwrap();
+        validate_path("/:id", &schema, &[]).unwrap();
+        assert_eq!(
+            coerce_form(&schema, json!({"id":"2","extra":"3"})).unwrap(),
+            json!({"id":2,"extra":"3"})
+        );
+        assert_eq!(
+            parse("/:id", &schema, "http://x/2?extra=3")
+                .unwrap_err()
+                .issues[0]["path"],
+            json!(["extra"])
+        );
+        assert_eq!(
+            parse_form_input(&schema, Input::from_value(json!({"id":"2","extra":3}))).unwrap(),
+            json!({"id":2,"extra":3})
         );
     }
 

@@ -2,7 +2,12 @@ use crate::DefinitionError;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fmt, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashSet,
+    fmt,
+    sync::Arc,
+};
 
 pub type Refinement = Arc<dyn Fn(Option<&Value>) -> Result<(), ValidationError> + Send + Sync>;
 pub type Transformation =
@@ -20,6 +25,12 @@ pub enum Schema {
     Enum(Vec<String>),
     Object(IndexMap<String, Schema>),
     Array(Box<Schema>),
+    Record(Box<Schema>),
+    Tuple(Vec<Schema>),
+    #[serde(skip)]
+    OpenObject(IndexMap<String, Schema>, Box<Schema>),
+    #[serde(skip)]
+    Lazy(GeneratedReference),
     Union(Vec<Schema>),
     Optional(Box<Schema>),
     Nullable(Box<Schema>),
@@ -39,9 +50,37 @@ pub enum Schema {
     Preprocess(Box<Schema>, Transformation),
 }
 
+// References retain only immutable source metadata, never a graph of owning Schema references.
+#[derive(Clone, Debug)]
+pub struct GeneratedReference {
+    root: Arc<Value>,
+    reference: String,
+}
+
+impl GeneratedReference {
+    fn key(&self) -> (usize, String) {
+        (Arc::as_ptr(&self.root) as usize, self.reference.clone())
+    }
+
+    pub(crate) fn resolve(&self) -> Schema {
+        let target = self
+            .root
+            .pointer(&self.reference[1..])
+            .expect("generated reference was checked during schema construction");
+        compile_schema(target, &self.root, &mut None, 0)
+            .expect("generated schema was checked during schema construction")
+    }
+}
+
 impl fmt::Debug for Schema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Lazy(reference) => f.debug_tuple("Lazy").field(&reference.reference).finish(),
+            Self::OpenObject(shape, rest) => f
+                .debug_tuple("OpenObject")
+                .field(shape)
+                .field(rest)
+                .finish(),
             Self::Integer { signed, bits } => f
                 .debug_struct("Integer")
                 .field("signed", signed)
@@ -201,6 +240,29 @@ fn invalid_values(values: Vec<Value>, path: &[Value]) -> ValidationError {
     }
 }
 
+/// Per-parse safety bounds. Every schema visit counts, including wrappers and union
+/// attempts, so large flat JSON arrays and records also consume `max_nodes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ValidationLimits {
+    pub max_depth: usize,
+    pub max_nodes: usize,
+}
+
+impl Default for ValidationLimits {
+    fn default() -> Self {
+        Self {
+            max_depth: 128,
+            max_nodes: 65_536,
+        }
+    }
+}
+
+struct ValidationBudget {
+    limits: ValidationLimits,
+    remaining: Cell<usize>,
+    failure: RefCell<Option<ValidationError>>,
+}
+
 struct Parsed {
     value: Option<Value>,
     fallback: bool,
@@ -217,16 +279,54 @@ impl Parsed {
 
 impl Schema {
     pub fn parse(&self, value: Option<Value>) -> Result<Option<Value>, ValidationError> {
-        self.parse_input(&value.map(Input::from_value).unwrap_or(Input::Absent))
+        self.parse_with_limits(value, ValidationLimits::default())
+    }
+
+    pub fn parse_with_limits(
+        &self,
+        value: Option<Value>,
+        limits: ValidationLimits,
+    ) -> Result<Option<Value>, ValidationError> {
+        self.parse_input_with_limits(
+            &value.map(Input::from_value).unwrap_or(Input::Absent),
+            limits,
+        )
     }
 
     pub fn parse_value(&self, value: Value) -> Result<Value, ValidationError> {
-        self.parse(Some(value))?
+        self.parse_value_with_limits(value, ValidationLimits::default())
+    }
+
+    pub fn parse_value_with_limits(
+        &self,
+        value: Value,
+        limits: ValidationLimits,
+    ) -> Result<Value, ValidationError> {
+        self.parse_with_limits(Some(value), limits)?
             .ok_or_else(|| ValidationError::custom("Schema returned undefined for a JSON value"))
     }
 
     pub(crate) fn parse_input(&self, input: &Input) -> Result<Option<Value>, ValidationError> {
-        self.parse_at(input, &[], 0).map(|parsed| parsed.value)
+        self.parse_input_with_limits(input, ValidationLimits::default())
+    }
+
+    fn parse_input_with_limits(
+        &self,
+        input: &Input,
+        limits: ValidationLimits,
+    ) -> Result<Option<Value>, ValidationError> {
+        let budget = ValidationBudget {
+            remaining: Cell::new(limits.max_nodes),
+            limits,
+            failure: RefCell::new(None),
+        };
+        let result = self
+            .parse_at(input, &[], 0, &budget)
+            .map(|parsed| parsed.value);
+        match budget.failure.into_inner() {
+            Some(error) => Err(error),
+            None => result,
+        }
     }
 
     fn parse_at(
@@ -234,12 +334,33 @@ impl Schema {
         input: &Input,
         path: &[Value],
         depth: usize,
+        budget: &ValidationBudget,
     ) -> Result<Parsed, ValidationError> {
-        if depth > 128 {
-            return Err(ValidationError::custom("Schema nesting exceeds 128 levels").at(path));
+        if let Some(error) = budget.failure.borrow().as_ref() {
+            return Err(error.clone());
         }
-        let inner = |schema: &Schema| schema.parse_at(input, path, depth + 1);
+        let limit_error = if depth > budget.limits.max_depth {
+            Some(format!(
+                "Schema nesting exceeds {} levels",
+                budget.limits.max_depth
+            ))
+        } else if budget.remaining.get() == 0 {
+            Some(format!(
+                "Schema validation exceeds {} nodes",
+                budget.limits.max_nodes
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = limit_error {
+            let error = ValidationError::custom(message).at(path);
+            *budget.failure.borrow_mut() = Some(error.clone());
+            return Err(error);
+        }
+        budget.remaining.set(budget.remaining.get() - 1);
+        let inner = |schema: &Schema| schema.parse_at(input, path, depth + 1, budget);
         match self {
+            Self::Lazy(reference) => inner(&reference.resolve()),
             Self::Unknown => Ok(Parsed::new(input.to_value())),
             Self::String if matches!(input, Input::Scalar(Value::String(_))) => {
                 Ok(Parsed::new(input.to_value()))
@@ -285,82 +406,13 @@ impl Schema {
                     ))
                 }
             }
-            Self::Object(shape) => {
-                let empty = IndexMap::new();
-                let fields = match input {
-                    Input::Object(fields) => fields,
-                    Input::Promise | Input::Blob => &empty,
-                    _ => return Err(invalid_type("object", input, path)),
-                };
-                let mut output = serde_json::Map::new();
-                let mut issues = Vec::new();
-                for (key, schema) in shape {
-                    let mut child_path = path.to_vec();
-                    child_path.push(Value::String(key.clone()));
-                    let present = fields.contains_key(key);
-                    match schema.parse_at(fields.get(key).unwrap_or(&Input::Absent), &child_path, depth + 1) {
-                        Ok(_) if !present && !schema.optional_input() => issues.push(json!({"code":"invalid_type", "expected":"nonoptional", "path":child_path, "message":"Invalid input: expected nonoptional, received undefined"})),
-                        Ok(Parsed { value: Some(value), .. }) => { output.insert(key.clone(), value); }
-                        Ok(Parsed { value: None, .. }) => {}
-                        Err(_) if !present && schema.optional_input() && schema.optional_output() => {}
-                        Err(error) => issues.extend(error.issues),
-                    }
-                }
-                if issues.is_empty() {
-                    Ok(Parsed::new(Some(Value::Object(output))))
-                } else {
-                    Err(ValidationError { issues })
-                }
+            Self::Object(_) | Self::OpenObject(_, _) => {
+                self.parse_object(input, path, depth, budget)
             }
-            Self::Array(element) => {
-                let Input::Array(items) = input else {
-                    return Err(invalid_type("array", input, path));
-                };
-                let mut output = Vec::with_capacity(items.len());
-                let mut issues = Vec::new();
-                for (index, item) in items.iter().enumerate() {
-                    let mut child_path = path.to_vec();
-                    child_path.push(json!(index));
-                    match element.parse_at(item, &child_path, depth + 1) {
-                        Ok(parsed) => output.push(parsed.value.unwrap_or(Value::Null)),
-                        Err(error) => issues.extend(error.issues),
-                    }
-                }
-                if issues.is_empty() {
-                    Ok(Parsed::new(Some(Value::Array(output))))
-                } else {
-                    Err(ValidationError { issues })
-                }
-            }
-            Self::Union(branches) => {
-                let mut errors = Vec::new();
-                for branch in branches {
-                    match branch.parse_at(input, &[], depth + 1) {
-                        Ok(value) => return Ok(value),
-                        Err(error) => errors.push(error),
-                    }
-                }
-                let continuable = errors
-                    .iter()
-                    .filter(|e| {
-                        e.issues.iter().all(|i| {
-                            !matches!(
-                                i["code"].as_str(),
-                                Some("invalid_type" | "invalid_value" | "invalid_union")
-                            )
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                if continuable.len() == 1 {
-                    return Err(continuable[0].clone().at(path));
-                }
-                Err(ValidationError {
-                    issues: vec![json!({
-                        "code": "invalid_union", "errors": errors.into_iter().map(|e| e.issues).collect::<Vec<_>>(),
-                        "path": path, "message": "Invalid input"
-                    })],
-                })
-            }
+            Self::Record(_) => self.parse_record(input, path, depth, budget),
+            Self::Tuple(_) => self.parse_tuple(input, path, depth, budget),
+            Self::Array(_) => self.parse_array(input, path, depth, budget),
+            Self::Union(_) => self.parse_union(input, path, depth, budget),
             Self::Optional(schema) if matches!(input, Input::Absent) => {
                 if !schema.optional_input() {
                     return Ok(Parsed::new(None));
@@ -405,6 +457,7 @@ impl Schema {
                     &value.map(Input::from_value).unwrap_or(Input::Absent),
                     path,
                     depth + 1,
+                    budget,
                 )?;
                 parsed.fallback = true;
                 Ok(parsed)
@@ -413,6 +466,224 @@ impl Schema {
                 inner(schema)
             }
         }
+    }
+
+    fn parse_object(
+        &self,
+        input: &Input,
+        path: &[Value],
+        depth: usize,
+        budget: &ValidationBudget,
+    ) -> Result<Parsed, ValidationError> {
+        let (Self::Object(shape) | Self::OpenObject(shape, _)) = self else {
+            unreachable!()
+        };
+
+        let empty = IndexMap::new();
+        let fields = match input {
+            Input::Object(fields) => fields,
+            Input::Promise | Input::Blob => &empty,
+            _ => return Err(invalid_type("object", input, path)),
+        };
+        let mut output = serde_json::Map::new();
+        let mut issues = Vec::new();
+        for (key, schema) in shape {
+            let mut child_path = path.to_vec();
+            child_path.push(Value::String(key.clone()));
+            let present = fields.contains_key(key);
+            match schema.parse_at(fields.get(key).unwrap_or(&Input::Absent), &child_path, depth + 1, budget) {
+                        Ok(_) if !present && !schema.optional_input() => issues.push(json!({"code":"invalid_type", "expected":"nonoptional", "path":child_path, "message":"Invalid input: expected nonoptional, received undefined"})),
+                        Ok(Parsed { value: Some(value), .. }) => { output.insert(key.clone(), value); }
+                        Ok(Parsed { value: None, .. }) => {}
+                        Err(_) if !present && schema.optional_input() && schema.optional_output() => {}
+                        Err(error) => issues.extend(error.issues),
+                    }
+        }
+        if let Self::OpenObject(_, rest) = self {
+            for (key, value) in fields.iter().filter(|(key, _)| !shape.contains_key(*key)) {
+                let mut child_path = path.to_vec();
+                child_path.push(json!(key));
+                match rest.parse_at(value, &child_path, depth + 1, budget) {
+                    Ok(Parsed {
+                        value: Some(value), ..
+                    }) => {
+                        output.insert(key.clone(), value);
+                    }
+                    Ok(_) => {}
+                    Err(error) => issues.extend(error.issues),
+                }
+            }
+        }
+        if issues.is_empty() {
+            Ok(Parsed::new(Some(Value::Object(output))))
+        } else {
+            Err(ValidationError { issues })
+        }
+    }
+
+    fn parse_record(
+        &self,
+        input: &Input,
+        path: &[Value],
+        depth: usize,
+        budget: &ValidationBudget,
+    ) -> Result<Parsed, ValidationError> {
+        let Self::Record(element) = self else {
+            unreachable!()
+        };
+
+        let Input::Object(fields) = input else {
+            return Err(invalid_type("record", input, path));
+        };
+        let mut output = serde_json::Map::new();
+        let mut issues = Vec::new();
+        for (key, item) in fields {
+            let mut child_path = path.to_vec();
+            child_path.push(json!(key));
+            match element.parse_at(item, &child_path, depth + 1, budget) {
+                Ok(Parsed {
+                    value: Some(value), ..
+                }) => {
+                    output.insert(key.clone(), value);
+                }
+                Ok(_) => {}
+                Err(error) => issues.extend(error.issues),
+            }
+        }
+        if issues.is_empty() {
+            Ok(Parsed::new(Some(Value::Object(output))))
+        } else {
+            Err(ValidationError { issues })
+        }
+    }
+
+    fn parse_tuple(
+        &self,
+        input: &Input,
+        path: &[Value],
+        depth: usize,
+        budget: &ValidationBudget,
+    ) -> Result<Parsed, ValidationError> {
+        let Self::Tuple(elements) = self else {
+            unreachable!()
+        };
+
+        let Input::Array(items) = input else {
+            return Err(invalid_type("tuple", input, path));
+        };
+        if items.len() != elements.len() {
+            let lower = items.len() < elements.len();
+            let mut issue = serde_json::Map::new();
+            issue.insert(
+                "code".into(),
+                json!(if lower { "too_small" } else { "too_big" }),
+            );
+            issue.insert(
+                if lower { "minimum" } else { "maximum" }.into(),
+                json!(elements.len()),
+            );
+            issue.insert("inclusive".into(), json!(true));
+            issue.insert("origin".into(), json!("array"));
+            issue.insert("path".into(), json!(path));
+            issue.insert(
+                "message".into(),
+                json!(format!(
+                    "{}: expected array to have {}{} items",
+                    if lower { "Too small" } else { "Too big" },
+                    if lower { ">=" } else { "<=" },
+                    elements.len()
+                )),
+            );
+            return Err(ValidationError {
+                issues: vec![Value::Object(issue)],
+            });
+        }
+        let mut output = Vec::with_capacity(items.len());
+        let mut issues = Vec::new();
+        for (index, (element, item)) in elements.iter().zip(items).enumerate() {
+            let mut child_path = path.to_vec();
+            child_path.push(json!(index));
+            match element.parse_at(item, &child_path, depth + 1, budget) {
+                Ok(parsed) => output.push(parsed.value.unwrap_or(Value::Null)),
+                Err(error) => issues.extend(error.issues),
+            }
+        }
+        if issues.is_empty() {
+            Ok(Parsed::new(Some(Value::Array(output))))
+        } else {
+            Err(ValidationError { issues })
+        }
+    }
+
+    fn parse_array(
+        &self,
+        input: &Input,
+        path: &[Value],
+        depth: usize,
+        budget: &ValidationBudget,
+    ) -> Result<Parsed, ValidationError> {
+        let Self::Array(element) = self else {
+            unreachable!()
+        };
+
+        let Input::Array(items) = input else {
+            return Err(invalid_type("array", input, path));
+        };
+        let mut output = Vec::with_capacity(items.len());
+        let mut issues = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let mut child_path = path.to_vec();
+            child_path.push(json!(index));
+            match element.parse_at(item, &child_path, depth + 1, budget) {
+                Ok(parsed) => output.push(parsed.value.unwrap_or(Value::Null)),
+                Err(error) => issues.extend(error.issues),
+            }
+        }
+        if issues.is_empty() {
+            Ok(Parsed::new(Some(Value::Array(output))))
+        } else {
+            Err(ValidationError { issues })
+        }
+    }
+
+    fn parse_union(
+        &self,
+        input: &Input,
+        path: &[Value],
+        depth: usize,
+        budget: &ValidationBudget,
+    ) -> Result<Parsed, ValidationError> {
+        let Self::Union(branches) = self else {
+            unreachable!()
+        };
+
+        let mut errors = Vec::new();
+        for branch in branches {
+            match branch.parse_at(input, &[], depth + 1, budget) {
+                Ok(value) => return Ok(value),
+                Err(error) => errors.push(error),
+            }
+        }
+        let continuable = errors
+            .iter()
+            .filter(|e| {
+                e.issues.iter().all(|i| {
+                    !matches!(
+                        i["code"].as_str(),
+                        Some("invalid_type" | "invalid_value" | "invalid_union")
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        if continuable.len() == 1 {
+            return Err(continuable[0].clone().at(path));
+        }
+        Err(ValidationError {
+            issues: vec![json!({
+                "code": "invalid_union", "errors": errors.into_iter().map(|e| e.issues).collect::<Vec<_>>(),
+                "path": path, "message": "Invalid input"
+            })],
+        })
     }
 
     fn optional_input(&self) -> bool {
@@ -481,29 +752,33 @@ impl Schema {
     }
 
     pub fn validate_params(&self) -> Result<(), DefinitionError> {
-        self.validate_params_at("", 0)
+        self.validate_params_at("", 0, &mut HashSet::new())
     }
 
-    fn validate_params_at(&self, path: &str, depth: usize) -> Result<(), DefinitionError> {
+    fn validate_params_at(
+        &self,
+        path: &str,
+        depth: usize,
+        references: &mut HashSet<(usize, String)>,
+    ) -> Result<(), DefinitionError> {
         if depth > 128 {
             return Err(DefinitionError("Schema nesting exceeds 128 levels".into()));
         }
         match self.unwrapped() {
+            Self::Lazy(reference) => {
+                if references.insert(reference.key()) {
+                    reference
+                        .resolve()
+                        .validate_params_at(path, depth + 1, references)?;
+                }
+            }
             Self::Union(branches) => {
-                let origins = branches
-                    .iter()
-                    .filter(|b| {
-                        matches!(
-                            b.unwrapped(),
-                            Self::String
-                                | Self::Number
-                                | Self::Integer { .. }
-                                | Self::Boolean
-                                | Self::Enum(_)
-                                | Self::Literal(Value::String(_))
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                let mut origins = Vec::new();
+                for branch in branches {
+                    if branch.string_origin(&mut HashSet::new(), 0)? {
+                        origins.push(branch);
+                    }
+                }
                 if origins.len() > 1 {
                     let at = if path.is_empty() {
                         String::new()
@@ -520,10 +795,10 @@ impl Schema {
                     )));
                 }
                 for branch in branches {
-                    branch.validate_params_at(path, depth + 1)?;
+                    branch.validate_params_at(path, depth + 1, references)?;
                 }
             }
-            Self::Object(shape) => {
+            Self::Object(shape) | Self::OpenObject(shape, _) => {
                 for (key, schema) in shape {
                     schema.validate_params_at(
                         &if path.is_empty() {
@@ -532,17 +807,55 @@ impl Schema {
                             format!("{path}.{key}")
                         },
                         depth + 1,
+                        references,
                     )?;
                 }
             }
-            Self::Array(element) => element.validate_params_at(&format!("{path}[]"), depth + 1)?,
+            Self::Array(element) | Self::Record(element) => {
+                element.validate_params_at(&format!("{path}[]"), depth + 1, references)?
+            }
+            Self::Tuple(elements) => {
+                for (index, element) in elements.iter().enumerate() {
+                    element.validate_params_at(
+                        &format!("{path}.{index}"),
+                        depth + 1,
+                        references,
+                    )?;
+                }
+            }
             _ => {}
+        }
+        if let Self::OpenObject(_, rest) = self.unwrapped() {
+            rest.validate_params_at(&format!("{path}[]"), depth + 1, references)?;
         }
         Ok(())
     }
 
+    fn string_origin(
+        &self,
+        references: &mut HashSet<(usize, String)>,
+        depth: usize,
+    ) -> Result<bool, DefinitionError> {
+        if depth > 128 {
+            return Err(DefinitionError("Schema nesting exceeds 128 levels".into()));
+        }
+        Ok(match self.unwrapped() {
+            Self::Lazy(reference) if references.insert(reference.key()) => {
+                reference.resolve().string_origin(references, depth + 1)?
+            }
+            Self::String
+            | Self::Number
+            | Self::Integer { .. }
+            | Self::Boolean
+            | Self::Enum(_)
+            | Self::Literal(Value::String(_)) => true,
+            _ => false,
+        })
+    }
+
     fn zod_name(&self) -> &'static str {
         match self {
+            Self::Lazy(reference) => reference.resolve().zod_name(),
             Self::String => "ZodString",
             Self::Number | Self::Integer { .. } => "ZodNumber",
             Self::Boolean => "ZodBoolean",
@@ -560,9 +873,12 @@ impl Schema {
         }
     }
 
+    /// Compiles Schemars structs, string-key maps, fixed tuples and recursive finite data.
+    /// Unsupported formats and regex constraints return errors. Use an explicit runtime
+    /// schema with `refine` or `preprocess` for custom Rust validation instead.
     pub fn from_type<T: schemars::JsonSchema>() -> Result<Self, DefinitionError> {
-        let generated = schemars::schema_for!(T).to_value();
-        compile_schema(&generated, &generated, &mut Vec::new(), 0)
+        let generated = Arc::new(schemars::schema_for!(T).to_value());
+        compile_schema(&generated, &generated, &mut Some(HashSet::new()), 0)
     }
 }
 
@@ -638,8 +954,8 @@ fn unsupported(detail: impl fmt::Display) -> DefinitionError {
 
 fn compile_schema(
     value: &Value,
-    root: &Value,
-    references: &mut Vec<String>,
+    root: &Arc<Value>,
+    references: &mut Option<HashSet<String>>,
     depth: usize,
 ) -> Result<Schema, DefinitionError> {
     if depth > 128 {
@@ -673,6 +989,7 @@ fn compile_schema(
                 | "required"
                 | "additionalProperties"
                 | "items"
+                | "prefixItems"
                 | "minItems"
                 | "maxItems"
                 | "minimum"
@@ -698,20 +1015,24 @@ fn compile_schema(
         }) {
             return Err(unsupported("$ref with validation siblings"));
         }
-        if references.iter().any(|r| r == reference) {
-            return Err(unsupported(format!("recursive reference {reference}")));
-        }
         let pointer = reference
             .strip_prefix('#')
             .ok_or_else(|| unsupported("external reference"))?;
         let target = root
             .pointer(pointer)
             .ok_or_else(|| unsupported(format!("unresolved reference {reference}")))?;
-        references.push(reference.into());
-        let result = compile_schema(target, root, references, depth + 1);
-        references.pop();
-        return result;
+        if references
+            .as_mut()
+            .is_some_and(|seen| seen.insert(reference.into()))
+        {
+            compile_schema(target, root, references, depth + 1)?;
+        }
+        return Ok(Schema::Lazy(GeneratedReference {
+            root: Arc::clone(root),
+            reference: reference.into(),
+        }));
     }
+
     if let Some(format) = object.get("format") {
         if !matches!(
             format.as_str(),
@@ -811,19 +1132,36 @@ fn compile_schema(
             Some("number") => Schema::Number,
             Some("boolean") => Schema::Boolean,
             Some("null") => Schema::Literal(Value::Null),
-            Some("array") => Schema::Array(Box::new(compile_schema(
-                object.get("items").unwrap_or(&Value::Bool(true)),
-                root,
-                references,
-                depth + 1,
-            )?)),
-            Some("object") => {
-                if object
-                    .get("additionalProperties")
-                    .is_some_and(|v| v != &Value::Bool(false))
-                {
-                    return Err(unsupported("open objects and map additionalProperties"));
+            Some("array") => {
+                if let Some(prefix) = object.get("prefixItems") {
+                    let elements = prefix
+                        .as_array()
+                        .ok_or_else(|| unsupported("non-array prefixItems"))?;
+                    if object.get("minItems").and_then(Value::as_u64) != Some(elements.len() as u64)
+                        || object.get("maxItems").and_then(Value::as_u64)
+                            != Some(elements.len() as u64)
+                        || object
+                            .get("items")
+                            .is_some_and(|v| v != &Value::Bool(false))
+                    {
+                        return Err(unsupported("variable-length tuple"));
+                    }
+                    Schema::Tuple(
+                        elements
+                            .iter()
+                            .map(|v| compile_schema(v, root, references, depth + 1))
+                            .collect::<Result<_, _>>()?,
+                    )
+                } else {
+                    Schema::Array(Box::new(compile_schema(
+                        object.get("items").unwrap_or(&Value::Bool(true)),
+                        root,
+                        references,
+                        depth + 1,
+                    )?))
                 }
+            }
+            Some("object") => {
                 let required = object.get("required").and_then(Value::as_array);
                 let mut fields = IndexMap::new();
                 if let Some(properties) = object.get("properties") {
@@ -842,7 +1180,17 @@ fn compile_schema(
                         fields.insert(name.clone(), field);
                     }
                 }
-                Schema::Object(fields)
+                match object.get("additionalProperties") {
+                    Some(Value::Bool(false)) | None => Schema::Object(fields),
+                    Some(value) => {
+                        let element = Box::new(compile_schema(value, root, references, depth + 1)?);
+                        if fields.is_empty() {
+                            Schema::Record(element)
+                        } else {
+                            Schema::OpenObject(fields, element)
+                        }
+                    }
+                }
             }
             None if object.is_empty()
                 || object.keys().all(|k| {
@@ -872,6 +1220,9 @@ fn compile_schema(
         ("minItems", "array", true, true),
         ("maxItems", "array", false, true),
     ] {
+        if object.contains_key("prefixItems") && matches!(key, "minItems" | "maxItems") {
+            continue;
+        }
         if let Some(bound) = object.get(key) {
             let limit = bound
                 .as_f64()
@@ -1527,26 +1878,414 @@ mod tests {
         next: Option<Box<Recursive>>,
     }
 
+    fn typed_roundtrip<T>(input: Value) -> Value
+    where
+        T: schemars::JsonSchema + serde::de::DeserializeOwned + Serialize,
+    {
+        let schema = Schema::from_type::<T>().unwrap();
+        let parsed = schema.parse_value(input).unwrap();
+        let typed: T = serde_json::from_value(parsed.clone()).unwrap();
+        assert_eq!(serde_json::to_value(typed).unwrap(), parsed);
+        parsed
+    }
+
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
+    struct MapValue {
+        count: i32,
+        pairs: Vec<(String, bool)>,
+    }
+
+    #[test]
+    fn derived_string_key_maps_retain_keys_and_validate_nested_values() {
+        type Map = std::collections::BTreeMap<String, MapValue>;
+        let expected =
+            json!({"first":{"count":3,"pairs":[["a",true]]},"second":{"count":0,"pairs":[]}});
+        assert_eq!(
+            typed_roundtrip::<Map>(json!({
+                "first":{"count":3.0,"pairs":[["a",true]],"stripped":1},
+                "second":{"count":0,"pairs":[]}
+            })),
+            expected
+        );
+        assert_eq!(
+            typed_roundtrip::<std::collections::HashMap<String, String>>(json!({})),
+            json!({})
+        );
+        let schema = Schema::from_type::<Map>().unwrap();
+        let error = schema
+            .parse_value(json!({"first":{"count":"3","pairs":[]}}))
+            .unwrap_err();
+        assert_eq!(error.issues[0]["path"], json!(["first", "count"]));
+        assert_eq!(error.issues[0]["expected"], "number");
+        let record = Schema::Record(Box::new(Schema::Number));
+        assert_eq!(
+            record.parse_value(json!([1])).unwrap_err().issues,
+            vec![json!({
+                "expected":"record","code":"invalid_type","path":[],
+                "message":"Invalid input: expected record, received array"
+            })]
+        );
+    }
+
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
+    struct OpenFields {
+        known: String,
+        #[serde(flatten)]
+        extra: std::collections::BTreeMap<String, i32>,
+    }
+
+    #[test]
+    fn derived_open_objects_preserve_and_validate_catchall_fields() {
+        assert_eq!(
+            typed_roundtrip::<OpenFields>(json!({"known":"a","x":2.0,"y":3})),
+            json!({"known":"a","x":2,"y":3})
+        );
+        let schema = Schema::from_type::<OpenFields>().unwrap();
+        assert_eq!(
+            schema
+                .parse_value(json!({"known":"a","x":"2"}))
+                .unwrap_err()
+                .issues[0]["path"],
+            json!(["x"])
+        );
+        assert_eq!(
+            schema.parse_value(json!({"x":2})).unwrap_err().issues[0]["path"],
+            json!(["known"])
+        );
+        assert_eq!(
+            object([("known", Schema::String)])
+                .parse_value(json!({"known":"a","x":2}))
+                .unwrap(),
+            json!({"known":"a"})
+        );
+        assert_eq!(
+            typed_roundtrip::<std::collections::BTreeMap<String, Value>>(
+                json!({"x":{"a":[1,true,null]}})
+            ),
+            json!({"x":{"a":[1,true,null]}})
+        );
+    }
+
+    #[test]
+    fn derived_heterogeneous_tuples_roundtrip_and_emit_exact_zod_errors() {
+        assert_eq!(
+            typed_roundtrip::<(String, bool, i32)>(json!(["a", false, 2.0])),
+            json!(["a", false, 2])
+        );
+        assert_eq!(
+            typed_roundtrip::<(Vec<(bool, String)>, Option<i32>)>(json!([[[true, "a"]], null])),
+            json!([[[true, "a"]], null])
+        );
+        let schema = Schema::from_type::<(String, bool)>().unwrap();
+        for input in [json!([]), json!(["a"])] {
+            assert_eq!(
+                schema.parse_value(input).unwrap_err().issues,
+                vec![json!({
+                    "code":"too_small","minimum":2,"inclusive":true,"origin":"array","path":[],
+                    "message":"Too small: expected array to have >=2 items"
+                })]
+            );
+        }
+        assert_eq!(
+            schema
+                .parse_value(json!(["a", true, 0]))
+                .unwrap_err()
+                .issues,
+            vec![json!({
+                "code":"too_big","maximum":2,"inclusive":true,"origin":"array","path":[],
+                "message":"Too big: expected array to have <=2 items"
+            })]
+        );
+        assert_eq!(
+            schema.parse_value(json!(["a", "true"])).unwrap_err().issues,
+            vec![json!({
+                "expected":"boolean","code":"invalid_type","path":[1],
+                "message":"Invalid input: expected boolean, received string"
+            })]
+        );
+        assert_eq!(
+            schema.parse_value(json!({})).unwrap_err().issues[0]["expected"],
+            "tuple"
+        );
+        assert_eq!(typed_roundtrip::<(String,)>(json!(["a"])), json!(["a"]));
+    }
+
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
+    struct Tree {
+        name: String,
+        children: Vec<Tree>,
+        next: Option<Box<Tree>>,
+    }
+
+    #[test]
+    fn recursive_box_vec_structs_validate_and_strip_at_every_level() {
+        let input = json!({"name":"root","children":[{"name":"child","children":[],"next":null,"extra":1}],
+            "next":{"name":"next","children":[],"next":null,"extra":2},"extra":3});
+        let expected = json!({"name":"root","children":[{"name":"child","children":[],"next":null}],
+            "next":{"name":"next","children":[],"next":null}});
+        assert_eq!(typed_roundtrip::<Tree>(input), expected);
+        let schema = Schema::from_type::<Tree>().unwrap();
+        schema.validate_params().unwrap();
+        let error = schema
+            .parse_value(json!({"name":"root","children":[{"name":2,"children":[]}]}))
+            .unwrap_err();
+        assert_eq!(error.issues[0]["path"], json!(["children", 0, "name"]));
+        assert_eq!(error.issues[0]["expected"], "string");
+        assert_eq!(
+            Schema::from_type::<Recursive>()
+                .unwrap()
+                .parse_value(json!({"next":{"next":null}}))
+                .unwrap(),
+            json!({"next":{"next":null}})
+        );
+    }
+
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
+    enum Expression {
+        Number(i32),
+        Pair(Box<Expression>, Box<Expression>),
+        List(Vec<Expression>),
+    }
+
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    enum TaggedTree {
+        Leaf { value: i32 },
+        Branch { children: Vec<TaggedTree> },
+    }
+
+    #[test]
+    fn recursive_enums_and_tuple_variants_validate_finite_data() {
+        let expression = json!({"Pair":[{"Number":3.0},{"List":[{"Number":4}]}]});
+        assert_eq!(
+            typed_roundtrip::<Expression>(expression),
+            json!({"Pair":[{"Number":3},{"List":[{"Number":4}]}]})
+        );
+        let tagged = json!({"kind":"branch","children":[{"kind":"leaf","value":2}]});
+        assert_eq!(typed_roundtrip::<TaggedTree>(tagged.clone()), tagged);
+        Schema::from_type::<Expression>()
+            .unwrap()
+            .validate_params()
+            .unwrap();
+        Schema::from_type::<TaggedTree>()
+            .unwrap()
+            .validate_params()
+            .unwrap();
+        assert!(
+            Schema::from_type::<Expression>()
+                .unwrap()
+                .parse_value(json!({"List":[{"Number":"3"}]}))
+                .is_err()
+        );
+    }
+
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
+    struct MutualA {
+        b: Option<Box<MutualB>>,
+    }
+    #[derive(schemars::JsonSchema, Serialize, Deserialize)]
+    struct MutualB {
+        a: Vec<MutualA>,
+        count: i32,
+    }
+
+    #[test]
+    fn mutually_recursive_definitions_validate_and_terminate() {
+        let input = json!({"b":{"a":[{"b":null}],"count":2}});
+        assert_eq!(typed_roundtrip::<MutualA>(input.clone()), input);
+        Schema::from_type::<MutualA>()
+            .unwrap()
+            .validate_params()
+            .unwrap();
+    }
+
+    #[derive(schemars::JsonSchema)]
+    #[serde(untagged)]
+    #[allow(dead_code)]
+    enum StringOrNumber {
+        Text(String),
+        Number(i32),
+    }
+    #[derive(schemars::JsonSchema)]
+    #[allow(dead_code)]
+    struct AmbiguousTree {
+        next: Option<Box<AmbiguousTree>>,
+        value: StringOrNumber,
+    }
+
+    #[test]
+    fn recursive_ambiguity_walk_checks_reachable_fields_after_back_edges() {
+        let schema = Schema::from_type::<AmbiguousTree>().unwrap();
+        let error = schema.validate_params().unwrap_err();
+        assert!(error.0.contains("ambiguous union"), "{error}");
+        assert!(error.0.contains("value"), "{error}");
+        for schema in [
+            Schema::Record(Box::new(Schema::Union(vec![
+                Schema::Number,
+                Schema::String,
+            ]))),
+            Schema::Tuple(vec![Schema::Union(vec![Schema::Boolean, Schema::String])]),
+        ] {
+            assert!(
+                schema
+                    .validate_params()
+                    .unwrap_err()
+                    .0
+                    .contains("ambiguous union")
+            );
+        }
+        // Independently derived roots may reuse the same local definition name.
+        let first = Arc::new(json!({"$ref":"#/$defs/X","$defs":{"X":{"type":"string"}}}));
+        let second = Arc::new(
+            json!({"$ref":"#/$defs/X","$defs":{"X":{"anyOf":[{"type":"string"},{"type":"number"}]}}}),
+        );
+        let compiled = [first, second]
+            .map(|root| compile_schema(&root, &root, &mut Some(HashSet::new()), 0).unwrap());
+        assert!(
+            Schema::Tuple(compiled.into())
+                .validate_params()
+                .unwrap_err()
+                .0
+                .contains("ambiguous union")
+        );
+    }
+
+    fn has_issue_message(error: &ValidationError, message: &str) -> bool {
+        fn contains(value: &Value, message: &str) -> bool {
+            match value {
+                Value::Object(fields) => {
+                    fields.get("message").and_then(Value::as_str) == Some(message)
+                        || fields.values().any(|v| contains(v, message))
+                }
+                Value::Array(items) => items.iter().any(|v| contains(v, message)),
+                _ => false,
+            }
+        }
+        error.issues.iter().any(|v| contains(v, message))
+    }
+
+    #[test]
+    fn validation_bounds_recursive_depth_total_work_and_reference_only_cycles() {
+        let schema = Schema::from_type::<Recursive>().unwrap();
+        let mut value = json!({"next":null});
+        for _ in 0..100 {
+            value = json!({"next":value});
+        }
+        let error = schema.parse_value(value).unwrap_err();
+        assert!(has_issue_message(
+            &error,
+            "Schema nesting exceeds 128 levels"
+        ));
+        let wide = Schema::Array(Box::new(Schema::Number));
+        let error = wide.parse_value(json!(vec![0; 65_536])).unwrap_err();
+        assert_eq!(
+            error.issues.last().unwrap()["message"],
+            "Schema validation exceeds 65536 nodes"
+        );
+        assert_eq!(error.issues.last().unwrap()["path"], json!([65_535]));
+        let cyclic = Arc::new(json!({"$ref":"#"}));
+        let cyclic = compile_schema(&cyclic, &cyclic, &mut Some(HashSet::new()), 0).unwrap();
+        cyclic.validate_params().unwrap();
+        assert!(has_issue_message(
+            &cyclic.parse_value(json!(null)).unwrap_err(),
+            "Schema nesting exceeds 128 levels"
+        ));
+    }
+
+    #[test]
+    fn validation_limits_are_per_parse_and_allow_intentional_larger_flat_data() {
+        let schema = Schema::Array(Box::new(Schema::Number));
+        let limits = ValidationLimits {
+            max_depth: 1,
+            max_nodes: 3,
+        };
+        assert_eq!(
+            schema
+                .parse_value_with_limits(json!([1, 2]), limits)
+                .unwrap(),
+            json!([1, 2])
+        );
+        assert_eq!(
+            schema
+                .parse_value_with_limits(json!([1, 2, 3]), limits)
+                .unwrap_err()
+                .issues[0]["message"],
+            "Schema validation exceeds 3 nodes"
+        );
+        assert_eq!(
+            schema.parse_value(json!([1, 2, 3])).unwrap(),
+            json!([1, 2, 3])
+        );
+        let larger = ValidationLimits {
+            max_depth: 1,
+            max_nodes: 65_538,
+        };
+        assert_eq!(
+            schema
+                .parse_value_with_limits(json!(vec![0; 65_537]), larger)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            65_537
+        );
+        assert_eq!(
+            Schema::Optional(Box::new(Schema::Number))
+                .parse_with_limits(None, limits)
+                .unwrap(),
+            None
+        );
+        let shallow = ValidationLimits {
+            max_depth: 0,
+            max_nodes: 3,
+        };
+        assert_eq!(
+            schema
+                .parse_value_with_limits(json!([1]), shallow)
+                .unwrap_err()
+                .issues[0]["message"],
+            "Schema nesting exceeds 0 levels"
+        );
+    }
+
+    #[test]
+    fn catch_optional_and_union_cannot_hide_validation_limit_exhaustion() {
+        let limits = ValidationLimits {
+            max_depth: 128,
+            max_nodes: 1,
+        };
+        for schema in [
+            Schema::Catch(Box::new(Schema::Number), json!(0)),
+            Schema::Optional(Box::new(Schema::Default(
+                Box::new(Schema::Number),
+                json!(0),
+            ))),
+            Schema::Union(vec![Schema::Number, Schema::Unknown]),
+        ] {
+            assert_eq!(
+                schema.parse_with_limits(None, limits).unwrap_err().issues[0]["message"],
+                "Schema validation exceeds 1 nodes"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_constructs_behind_recursive_references_fail_during_construction() {
+        let root = Arc::new(
+            json!({"$ref":"#/$defs/Node", "$defs":{"Node":{"type":"object","properties":{
+                "next":{"$ref":"#/$defs/Node"}, "value":{"type":"string","pattern":"^x"}
+            }}}}),
+        );
+        assert!(
+            compile_schema(&root, &root, &mut Some(HashSet::new()), 0)
+                .unwrap_err()
+                .0
+                .contains("keyword pattern")
+        );
+    }
+
     #[test]
     fn unsupported_typed_constructs_fail_explicitly() {
-        assert!(
-            Schema::from_type::<Recursive>()
-                .unwrap_err()
-                .0
-                .contains("recursive reference")
-        );
-        assert!(
-            Schema::from_type::<std::collections::HashMap<String, String>>()
-                .unwrap_err()
-                .0
-                .contains("additionalProperties")
-        );
-        assert!(
-            Schema::from_type::<(String, bool)>()
-                .unwrap_err()
-                .0
-                .contains("prefixItems")
-        );
         for value in [
             json!({"type":"string","pattern":"a"}),
             json!({"type":"string","format":"email"}),
@@ -1554,10 +2293,15 @@ mod tests {
             json!({"type":"array","uniqueItems":true}),
         ] {
             assert!(
-                compile_schema(&value, &value, &mut vec![], 0)
-                    .unwrap_err()
-                    .0
-                    .starts_with("Unsupported generated JSON schema:")
+                compile_schema(
+                    &value,
+                    &Arc::new(value.clone()),
+                    &mut Some(HashSet::new()),
+                    0
+                )
+                .unwrap_err()
+                .0
+                .starts_with("Unsupported generated JSON schema:")
             );
         }
     }
@@ -1565,7 +2309,13 @@ mod tests {
     #[test]
     fn generated_numeric_and_utf16_length_constraints_emit_zod_issues() {
         let number = json!({"type":"number","minimum":2});
-        let schema = compile_schema(&number, &number, &mut vec![], 0).unwrap();
+        let schema = compile_schema(
+            &number,
+            &Arc::new(number.clone()),
+            &mut Some(HashSet::new()),
+            0,
+        )
+        .unwrap();
         assert_eq!(
             schema.parse_value(json!(1)).unwrap_err().issues,
             vec![
@@ -1573,7 +2323,13 @@ mod tests {
             ]
         );
         let string = json!({"type":"string","maxLength":1});
-        let schema = compile_schema(&string, &string, &mut vec![], 0).unwrap();
+        let schema = compile_schema(
+            &string,
+            &Arc::new(string.clone()),
+            &mut Some(HashSet::new()),
+            0,
+        )
+        .unwrap();
         assert_eq!(
             schema.parse_value(json!("😀")).unwrap_err().issues[0]["message"],
             "Too big: expected string to have <=1 characters"

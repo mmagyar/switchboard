@@ -50,6 +50,13 @@ try {
       assert.equal(await page.getByText("Item 42; query: a b&c", { exact: true }).textContent(), "Item 42; query: a b&c");
       assert.match(await page.getByText(/^Schema rejected: /).innerText(), /^Schema rejected: /);
       assert.equal(await page.getByText(/^Untrusted JSON: /).textContent(), 'Untrusted JSON: {"title":"wrong title","query":"a b&c"}');
+      const transportFailures = await page.getByText(/^Network\/0: /).textContent();
+      assert.ok(transportFailures);
+      assert.equal(transportFailures.split("\n").length, 4);
+      assert.equal(transportFailures.split("\n").every((line) => line.startsWith("Network/0: Network request failed: ")), true);
+      assert.equal(transportFailures.includes("GET/HEAD method cannot have body"), true);
+      assert.equal(transportFailures.includes("TRACE"), true);
+      assert.equal(transportFailures.includes("JsValue"), false);
       await page.getByText("Rust server log\nsecond line", { exact: true }).waitFor();
       assert.equal(await page.getByText("Open", { exact: true }).textContent(), "Open");
       await page.screenshot({ path: resolve(artifacts, `${variant}-desktop.png`), fullPage: true });
@@ -85,6 +92,7 @@ try {
       const evidence = {
         browser: browser.version(),
         typedFetch: "Item 42; query: a b&c",
+        transportFailures,
         typedValidation: await page.getByText(/^Schema rejected: /).textContent(),
         unchecked: await page.getByText(/^Untrusted JSON: /).textContent(),
         countAfterDisposeAndClick: await page.getByRole("status").filter({ hasText: /^1$/ }).textContent(),

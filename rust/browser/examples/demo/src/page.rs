@@ -4,7 +4,8 @@ use std::{
     rc::Rc,
 };
 use switchboard_browser::{
-    BrowserClient, CallSettings, ClientOptions, EventListener, HotReloadConnection, RouteCallError,
+    BrowserClient, CallSettings, ClientErrorKind, ClientOptions, EventListener,
+    HotReloadConnection, RouteCallError,
 };
 use wasm_bindgen::prelude::*;
 use web_sys::Element;
@@ -72,6 +73,35 @@ pub async fn start() -> Result<Page, JsValue> {
         .map_err(js_error)?
         .ok_or_else(|| JsValue::from_str("Missing unchecked value"))?;
     element("unchecked")?.set_text_content(Some(&format!("Untrusted JSON: {value}")));
+
+    let mut failures = Vec::new();
+    for method in ["GET", "HEAD", "TRACE", "Invalid header"] {
+        let settings = if method == "Invalid header" {
+            CallSettings {
+                auth_token_override: Some("bad\r\nvalue".into()),
+                ..CallSettings::default()
+            }
+        } else {
+            CallSettings::default()
+        };
+        let (method, body) = if method == "Invalid header" {
+            ("GET", None)
+        } else {
+            (method, Some(&false))
+        };
+        let error = match client
+            .call::<bool, serde_json::Value>(method, "/health", body, &settings)
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => return Err(js_error("Expected fetch initialization failure")),
+        };
+        if error.kind != ClientErrorKind::Network || error.status != 0 {
+            return Err(js_error(format!("Expected Network/0, got {error:?}")));
+        }
+        failures.push(format!("Network/0: {}", error.message));
+    }
+    element("transport")?.set_text_content(Some(&failures.join("\n")));
 
     let counter = element("count")?;
     let count = Cell::new(0);

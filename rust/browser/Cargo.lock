@@ -585,6 +585,7 @@ dependencies = [
 name = "switchboard-browser"
 version = "0.2.0"
 dependencies = [
+ "js-sys",
  "schemars",
  "serde",
  "serde_json",

@@ -10,7 +10,7 @@ pub enum ClientErrorKind {
     Http,
     Network,
     InvalidResponse,
-    /// Invalid caller input, including JSON serialization or browser request construction.
+    /// Invalid caller input, including JSON serialization or a missing browser Window.
     Request,
 }
 

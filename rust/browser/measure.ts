@@ -31,7 +31,7 @@ const evidence = {
     gzip: rust.reduce((total, file) => total + file.gzip, bootstrapSize.gzip),
   },
   compression: "gzip level 9, each HTTP resource independently, no filename/timestamp header",
-  scope: "Both apps: typed fetch, literal output rejection, unchecked JSON, DOM counter/disposal, WS logs/close and RELOAD. Rust includes linked schema/serde code; reference imports original src/clientExport.ts and Zod. Shared server HTML/CSS excluded from both.",
+  scope: "Both apps: typed fetch, literal output rejection, unchecked JSON, DOM counter/disposal, WS logs/close, RELOAD and negative fetch initialization cases. Rust includes linked schema/serde code; reference imports original src/clientExport.ts and Zod. Shared server HTML/CSS excluded from both.",
 };
 await Bun.write(resolve(import.meta.dir, "../../.tmp/browser/artifact-sizes.json"), `${JSON.stringify(evidence, null, 2)}\n`);
 console.log(JSON.stringify(evidence, null, 2));

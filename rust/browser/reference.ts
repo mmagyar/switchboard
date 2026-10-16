@@ -1,5 +1,5 @@
 // Reference/test tooling only. The product browser application is authored in Rust.
-import { createClient, define } from "../../src/clientExport.ts";
+import { ApiError, createClient, define } from "../../src/clientExport.ts";
 import { z } from "zod";
 
 const paramsSchema = z.object({ itemId: z.number().int().nonnegative().max(4_294_967_295), query: z.string() });
@@ -27,6 +27,22 @@ try {
 }
 const value: unknown = await client(bad, params, undefined, { validateReturn: false });
 element("unchecked").textContent = `Untrusted JSON: ${JSON.stringify(value)}`;
+
+const negativeRoute = def.post("/health", "public", z.boolean(), z.unknown());
+const failures: string[] = [];
+for (const method of ["GET", "HEAD", "TRACE", "Invalid header"]) {
+  try {
+    await client(negativeRoute, {}, method === "Invalid header" ? undefined : false, {
+      methodOverride: method === "Invalid header" ? "GET" : method,
+      authTokenOverride: method === "Invalid header" ? "bad\r\nvalue" : undefined,
+    });
+    throw new Error("Expected fetch initialization failure");
+  } catch (error: unknown) {
+    if (!(error instanceof ApiError) || error.kind !== "network" || error.status !== 0) throw error;
+    failures.push(`Network/0: ${error.message}`);
+  }
+}
+element("transport").textContent = failures.join("\n");
 
 const increment = new AbortController();
 const controls = new AbortController();

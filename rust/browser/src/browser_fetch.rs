@@ -3,7 +3,7 @@ use crate::{BrowserClient, CallSettings, ClientError, Credentials};
 use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{Headers, Request, RequestCredentials, RequestInit, Response};
+use web_sys::{Headers, RequestCredentials, RequestInit, Response};
 
 impl BrowserClient {
     /// Deserializes successful JSON into the application's shared Rust type.
@@ -24,23 +24,19 @@ impl BrowserClient {
             Credentials::SameOrigin => RequestCredentials::SameOrigin,
             Credentials::Include => RequestCredentials::Include,
         });
-        let headers = Headers::new().map_err(request_error)?;
+        let headers = Headers::new().map_err(network_error)?;
         for (name, value) in &prepared.headers {
-            headers.set(name, value).map_err(request_error)?;
+            headers.set(name, value).map_err(network_error)?;
         }
         init.set_headers(&headers);
         if let Some(body) = &prepared.body {
             init.set_body(&JsValue::from_str(body));
         }
-        let request =
-            Request::new_with_str_and_init(&prepared.url, &init).map_err(request_error)?;
         let window = web_sys::window()
             .ok_or_else(|| ClientError::request("BrowserClient requires a browser Window"))?;
-        let raw = JsFuture::from(window.fetch_with_request(&request))
+        let raw = JsFuture::from(window.fetch_with_str_and_init(&prepared.url, &init))
             .await
-            .map_err(|error| {
-                ClientError::network(format!("Network request failed: {}", describe(error)))
-            })?;
+            .map_err(network_error)?;
         let response: Response = raw
             .dyn_into()
             .map_err(|_| ClientError::network("fetch did not return a Response"))?;
@@ -52,7 +48,7 @@ impl BrowserClient {
         let content_type = response
             .headers()
             .get("Content-Type")
-            .map_err(request_error)?
+            .map_err(network_error)?
             .unwrap_or_default();
         let text = read_text(&response).await;
         decode_response(&prepared.method, status, &content_type, text)
@@ -68,13 +64,14 @@ async fn read_text(response: &Response) -> Result<String, String> {
         .ok_or_else(|| "Response.text() did not return a string".into())
 }
 
-fn request_error(error: JsValue) -> ClientError {
-    ClientError::request(format!(
-        "Cannot construct browser request: {}",
-        describe(error)
-    ))
+fn network_error(error: JsValue) -> ClientError {
+    ClientError::network(format!("Network request failed: {}", describe(error)))
 }
 
 pub(crate) fn describe(error: JsValue) -> String {
-    error.as_string().unwrap_or_else(|| format!("{error:?}"))
+    if let Some(error) = error.dyn_ref::<js_sys::Error>() {
+        error.message().into()
+    } else {
+        error.as_string().unwrap_or_else(|| format!("{error:?}"))
+    }
 }

@@ -28,6 +28,7 @@ fn page(bootstrap: &str) -> switchboard::Response {
                     dt { "Fetch" } dd id="fetch" { "Loading item..." }
                     dt { "Validation" } dd id="validation" { "Checking output schema..." }
                     dt { "Unchecked" } dd id="unchecked" { "Loading untrusted JSON..." }
+                    dt { "Fetch initialization" } dd id="transport" { "Checking fetch failures..." }
                 }
                 h2 { "Owned browser resources" }
                 p { "Count: " output id="count" { "0" } }

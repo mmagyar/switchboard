@@ -72,6 +72,8 @@ pub struct ServerConfig {
     pub https: Option<Https>,
     pub redirect: Option<Redirect>,
     pub idle_timeout: Duration,
+    /// Total streamed request-body bytes. Zero permits only empty bodies.
+    pub max_request_body_size: usize,
 }
 
 impl Default for ServerConfig {
@@ -82,6 +84,7 @@ impl Default for ServerConfig {
             https: None,
             redirect: Some(Redirect::default()),
             idle_timeout: Duration::from_secs(10),
+            max_request_body_size: 128 * 1024 * 1024,
         }
     }
 }
@@ -236,6 +239,7 @@ pub async fn serve(
         options,
         messages: messages.clone(),
         tls: tls.is_some(),
+        max_request_body_size: config.max_request_body_size,
     });
     let task = tokio::spawn(async move {
         let mut connections = JoinSet::new();
@@ -308,6 +312,7 @@ struct State {
     options: ServerOptions,
     messages: broadcast::Sender<String>,
     tls: bool,
+    max_request_body_size: usize,
 }
 
 async fn connection<T>(io: T, state: Arc<State>, redirect: Option<u16>)
@@ -320,7 +325,12 @@ where
         let state = service_state.clone();
         let upgrade_tx = upgrade_tx.clone();
         async move {
-            let mut request = request.map(Body::new);
+            let mut request = request.map(|body| {
+                Body::new(http_body_util::Limited::new(
+                    body,
+                    state.max_request_body_size,
+                ))
+            });
             let result = match absolute_uri(&mut request, state.tls && redirect.is_none()) {
                 Err(()) => response(400, "text/plain", "Invalid request URL"),
                 Ok(()) => {
@@ -742,6 +752,88 @@ mod tests {
             matches!(result, Ok(0) | Err(_)),
             "socket remained open: {result:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn incoming_body_limit_counts_declared_and_chunked_bytes_without_pre_auth_buffering() {
+        assert_eq!(
+            ServerConfig::default().max_request_body_size,
+            128 * 1024 * 1024
+        );
+        let consumer = Arc::new(Router::with_default(Arc::new(|request, _| {
+            Box::pin(async move {
+                if request.uri().path() == "/reject" {
+                    return response(401, "text/plain", "Unauthorized");
+                }
+                match axum::body::to_bytes(request.into_body(), usize::MAX).await {
+                    Ok(bytes) => response(200, "text/plain", bytes),
+                    Err(error) => {
+                        let mut source: &(dyn std::error::Error + 'static) = &error;
+                        loop {
+                            if source.is::<http_body_util::LengthLimitError>() {
+                                return response(413, "text/plain", "Body too large");
+                            }
+                            match source.source() {
+                                Some(next) => source = next,
+                                None => panic!("missing LengthLimitError: {error}"),
+                            }
+                        }
+                    }
+                }
+            })
+        })));
+        let mut conf = config();
+        conf.max_request_body_size = 8;
+        let mut handle = serve(conf.clone(), consumer.clone(), ServerOptions::default())
+            .await
+            .unwrap();
+        let mut overflow_statuses = Vec::new();
+        for (headers, body) in [
+            ("Content-Length: 9", "abcdefghi"),
+            (
+                "Transfer-Encoding: chunked",
+                "4\r\nabcd\r\n4\r\nefgh\r\n1\r\ni\r\n0\r\n\r\n",
+            ),
+        ] {
+            let result = http_over(
+                TcpStream::connect(handle.local_addr()).await.unwrap(),
+                &format!("POST /consume HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{headers}\r\n\r\n{body}"),
+            ).await;
+            overflow_statuses.push(result.lines().next().unwrap().to_owned());
+        }
+        assert_eq!(overflow_statuses, ["HTTP/1.1 413 Payload Too Large"; 2]);
+        let exact = http_over(
+            TcpStream::connect(handle.local_addr()).await.unwrap(),
+            "POST /consume HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 8\r\n\r\néééé",
+        ).await;
+        assert!(exact.starts_with("HTTP/1.1 200 OK\r\n"), "{exact}");
+        assert!(exact.ends_with("éééé"), "{exact}");
+        let rejected = http_over(
+            TcpStream::connect(handle.local_addr()).await.unwrap(),
+            "POST /reject HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 999\r\n\r\n",
+        ).await;
+        assert!(
+            rejected.starts_with("HTTP/1.1 401 Unauthorized\r\n"),
+            "{rejected}"
+        );
+        assert!(rejected.ends_with("Unauthorized"), "{rejected}");
+        handle.stop().await.unwrap();
+
+        conf.max_request_body_size = 0;
+        let mut handle = serve(conf, consumer, ServerOptions::default())
+            .await
+            .unwrap();
+        for (body, status) in [("", "200 OK"), ("a", "413 Payload Too Large")] {
+            let result = http_over(
+                TcpStream::connect(handle.local_addr()).await.unwrap(),
+                &format!("POST /consume HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len()),
+            ).await;
+            assert!(
+                result.starts_with(&format!("HTTP/1.1 {status}\r\n")),
+                "{result}"
+            );
+        }
+        handle.stop().await.unwrap();
     }
 
     #[tokio::test]

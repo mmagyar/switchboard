@@ -221,7 +221,9 @@ fn merge(base: Input, replacement: Input) -> Result<Input, ValidationError> {
     match (base, replacement) {
         (Input::Object(mut base), Input::Object(replacement)) => {
             for (key, value) in replacement {
-                let previous = base.get(&key).cloned();
+                let previous = base
+                    .get_mut(&key)
+                    .map(|previous| std::mem::replace(previous, Input::Absent));
                 let next = match (previous, value) {
                     (Some(previous), next @ (Input::Object(_) | Input::Array(_))) => {
                         merge(previous, next)?
@@ -263,16 +265,6 @@ fn merge(base: Input, replacement: Input) -> Result<Input, ValidationError> {
 enum Conversion {
     Number,
     Boolean,
-}
-
-// Only optional and readonly are unwrapped by the reference coercion pass.
-fn coercion_schema(schema: &Schema) -> &Schema {
-    match schema {
-        Schema::Optional(inner) | Schema::Readonly(inner) | Schema::Refinement(inner, _) => {
-            coercion_schema(inner)
-        }
-        _ => schema,
-    }
 }
 
 fn js_number(value: &str) -> Option<Input> {
@@ -356,9 +348,12 @@ fn converted_at(
         return None;
     }
     remaining.set(remaining.get() - 1);
-    let schema = coercion_schema(schema);
     if matches!(input, Input::Absent) {
         return None;
+    }
+    if let Schema::Optional(inner) | Schema::Readonly(inner) | Schema::Refinement(inner, _) = schema
+    {
+        return converted_at(inner, input, conversion, depth + 1, remaining, failure);
     }
     if let Schema::Lazy(reference) = schema {
         return converted_at(
@@ -448,8 +443,12 @@ fn overlay_conversion(base: Input, replacement: Input, replace_arrays: bool) -> 
     match (base, replacement) {
         (Input::Object(mut base), Input::Object(replacement)) => {
             for (key, value) in replacement {
-                let next = if let Some(previous) = base.get(&key) {
-                    overlay_conversion(previous.clone(), value, replace_arrays)
+                let next = if let Some(previous) = base.get_mut(&key) {
+                    overlay_conversion(
+                        std::mem::replace(previous, Input::Absent),
+                        value,
+                        replace_arrays,
+                    )
                 } else {
                     value
                 };
@@ -584,8 +583,8 @@ fn stringify_object(
     query: &mut url::form_urlencoded::Serializer<'_, String>,
 ) {
     let fields = match value {
-        Value::Object(fields) => fields
-            .iter()
+        Value::Object(fields) => crate::json::ordered_entries(fields)
+            .into_iter()
             .map(|(k, v)| (k.clone(), v))
             .collect::<Vec<_>>(),
         Value::Array(items) => items
@@ -617,7 +616,7 @@ pub fn def_to_url(path: &str, schema: &Schema, params: Value) -> Result<String, 
         HttpError::new(400, "Invalid params - only object should be used as params")
     })?;
     let mut query = url::form_urlencoded::Serializer::new(String::new());
-    for (key, value) in fields {
+    for (key, value) in crate::json::ordered_entries(fields) {
         if route_params.iter().any(|(name, _)| *name == key) {
             continue;
         }
@@ -895,6 +894,26 @@ mod tests {
             parse("/", &Schema::Unknown, &wide).unwrap_err().issues[0]["message"],
             "Query structure exceeds 65536 nodes"
         );
+    }
+
+    #[test]
+    fn wide_shared_parent_query_preserves_every_value_and_insertion_order() {
+        let count = 16_000;
+        let query = (0..count)
+            .map(|i| format!("a.k{i}=v{i}"))
+            .collect::<Vec<_>>()
+            .join("&");
+        let result = parse("/", &Schema::Unknown, &format!("http://x/?{query}")).unwrap();
+        let fields = result.as_object().unwrap();
+        assert_eq!(fields.len(), count + 1);
+        let nested = fields["a"].as_object().unwrap();
+        assert_eq!(nested.len(), count);
+        for (i, (key, value)) in nested.iter().enumerate() {
+            assert_eq!(key, &format!("k{i}"));
+            assert_eq!(value, &json!(format!("v{i}")));
+            assert_eq!(fields[&format!("a.k{i}")], *value);
+        }
+        assert_eq!(fields.keys().next_back().unwrap(), "a");
     }
 
     #[test]
@@ -1274,6 +1293,72 @@ mod tests {
     }
 
     #[test]
+    fn coercion_counts_supported_wrappers_toward_depth_limit() {
+        for wrap in [
+            optional as fn(Schema) -> Schema,
+            |inner| Schema::Readonly(Box::new(inner)),
+            |inner| inner.refine(|_| Ok(())),
+        ] {
+            let mut inner = Schema::Number;
+            for _ in 0..127 {
+                inner = wrap(inner);
+            }
+            let schema = object([("n", inner.clone())]);
+            for result in [
+                coerce_form(&schema, json!({"n":"1"})),
+                parse_form(&schema, json!({"n":"1"})),
+            ] {
+                assert_eq!(result.unwrap(), json!({"n":1}));
+            }
+            let schema = object([("n", wrap(inner))]);
+            for error in [
+                coerce_form(&schema, json!({"n":"1"})).unwrap_err(),
+                parse_form(&schema, json!({"n":"1"})).unwrap_err(),
+            ] {
+                assert_eq!(
+                    error.issues,
+                    vec![
+                        json!({"code":"custom","path":[],"message":"Schema coercion nesting exceeds 128 levels"})
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn coercion_counts_supported_wrappers_toward_work_limit() {
+        for wrap in [
+            optional as fn(Schema) -> Schema,
+            |inner| Schema::Readonly(Box::new(inner)),
+            |inner| inner.refine(|_| Ok(())),
+        ] {
+            let mut inner = Schema::Number;
+            for _ in 0..63 {
+                inner = wrap(inner);
+            }
+            let schema = array(inner.clone());
+            for result in [
+                coerce_form(&schema, json!(vec!["1"; 1023])),
+                parse_form(&schema, json!(vec!["1"; 1023])),
+            ] {
+                assert_eq!(result.unwrap(), json!(vec![1; 1023]));
+            }
+            let schema = array(wrap(inner));
+            for error in [
+                coerce_form(&schema, json!(vec!["1"; 1024])).unwrap_err(),
+                parse_form(&schema, json!(vec!["1"; 1024])).unwrap_err(),
+            ] {
+                assert_eq!(
+                    error.issues,
+                    vec![
+                        json!({"code":"custom","path":[],"message":"Schema coercion exceeds 65536 nodes"})
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn generated_references_keep_object_array_coercion_and_path_validation() {
         let schema = Schema::from_type::<RecursiveQuery>().unwrap();
         validate_path("/:id", &schema, &[]).unwrap();
@@ -1346,6 +1431,28 @@ mod tests {
                 .unwrap_err()
                 .message,
             "Invalid params - only object should be used as params"
+        );
+    }
+
+    #[test]
+    fn url_generation_orders_index_keys_before_insertion_order_strings_at_every_level() {
+        let input = serde_json::from_str(
+            r#"{"z":"first","10":"ten","2":"two","01":"leading","4294967295":"nonindex","4294967294":"lastindex","a":"last"}"#,
+        )
+        .unwrap();
+        let expected =
+            "2=two&10=ten&4294967294=lastindex&z=first&01=leading&4294967295=nonindex&a=last";
+        assert_eq!(
+            def_to_url("/", &Schema::Unknown, input).unwrap(),
+            format!("?{expected}")
+        );
+        let input = serde_json::from_str(
+            r#"{"nested":{"z":"first","10":"ten","2":"two","a":"last"},"rows":[{"10":"ten","2":"two","z":"last"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            def_to_url("/", &Schema::Unknown, input).unwrap(),
+            "?nested.2=two&nested.10=ten&nested.z=first&nested.a=last&rows.0.2=two&rows.0.10=ten&rows.0.z=last"
         );
     }
 

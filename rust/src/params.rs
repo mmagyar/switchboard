@@ -71,7 +71,9 @@ pub fn validate_path(
 ) -> Result<(), DefinitionError> {
     let params = path_params(path)?;
     if !params.is_empty() {
-        let (Schema::Object(fields) | Schema::OpenObject(fields, _)) = schema else {
+        let (Schema::Object(fields) | Schema::StrictObject(fields) | Schema::OpenObject(fields, _)) =
+            schema
+        else {
             return Err(DefinitionError(format!(
                 "Route \"{path}\" has path params [{}] but paramsValidation is not a ZodObject",
                 params
@@ -417,7 +419,10 @@ fn converted_at(
                 Some(Input::Array(values))
             }
         }
-        (Schema::Object(shape) | Schema::OpenObject(shape, _), Input::Object(fields)) => {
+        (
+            Schema::Object(shape) | Schema::StrictObject(shape) | Schema::OpenObject(shape, _),
+            Input::Object(fields),
+        ) => {
             let values = shape
                 .iter()
                 .filter_map(|(key, schema)| {

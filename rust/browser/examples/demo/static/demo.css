@@ -21,7 +21,8 @@ h2 { margin-top: var(--space-3); font-size: 1.25rem; }
 dt { font-weight: 700; }
 dd { margin: 0 0 var(--space-2); overflow-wrap: anywhere; color: var(--muted); }
 button { min-height: 44px; padding: var(--space-1) var(--space-2); margin: 0 var(--space-1) var(--space-1) 0; border: 0; border-radius: var(--radius); background: var(--action); color: var(--panel); font: inherit; cursor: pointer; }
-button:hover { background: var(--action-hover); }
+button:enabled:hover { background: var(--action-hover); }
+button:disabled { background: var(--muted); cursor: not-allowed; }
 button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: var(--space-2); background: var(--surface); border-radius: var(--radius); }
 [role=status] { font-weight: 700; }

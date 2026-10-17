@@ -40,7 +40,30 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
 }
 
 #[wasm_bindgen]
-pub async fn start() -> Result<Page, JsValue> {
+pub async fn start() -> Result<Option<Page>, JsValue> {
+    match initialize().await {
+        Ok(page) => Ok(Some(page)),
+        Err(error) => {
+            for id in ["increment", "dispose"] {
+                element(id)?.set_attribute("disabled", "")?;
+            }
+            element("fetch")?.set_text_content(Some("Item unavailable."));
+            element("socket")?.set_text_content(Some("Not connected"));
+            for id in ["validation", "unchecked", "transport", "disposal", "logs"] {
+                element(id)?.set_text_content(Some("Unavailable."));
+            }
+            let message = error
+                .as_string()
+                .unwrap_or_else(|| "Browser initialization failed".into());
+            element("status")?.set_text_content(Some(&format!(
+                "Startup failed: {message}. Reload this page to try again."
+            )));
+            Ok(None)
+        }
+    }
+}
+
+async fn initialize() -> Result<Page, JsValue> {
     let client = BrowserClient::new("", ClientOptions::default());
     let params = ItemParams {
         item_id: 42,
@@ -159,9 +182,13 @@ pub async fn start() -> Result<Page, JsValue> {
         }
         disposed.set_text_content(Some("Disposed"));
     })?;
-    element("status")?.set_text_content(Some("Ready"));
-    Ok(Page {
+    let page = Page {
         controls: vec![open, close, dispose],
         connections,
-    })
+    };
+    for id in ["increment", "dispose"] {
+        element(id)?.remove_attribute("disabled")?;
+    }
+    element("status")?.set_text_content(Some("Ready"));
+    Ok(page)
 }

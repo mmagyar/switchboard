@@ -32,8 +32,8 @@ fn page(bootstrap: &str) -> switchboard::Response {
                 }
                 h2 { "Owned browser resources" }
                 p { "Count: " output id="count" { "0" } }
-                button id="increment" type="button" { "Increment" }
-                button id="dispose" type="button" { "Dispose resources" }
+                button id="increment" type="button" disabled { "Increment" }
+                button id="dispose" type="button" disabled { "Dispose resources" }
                 p { "Resources: " span id="disposal" { "Active" } }
                 p { "WebSocket: " span id="socket" { "Connecting..." } }
                 pre id="logs" { "Waiting for logs..." }

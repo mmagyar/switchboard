@@ -1,4 +1,4 @@
-import { chromium } from "playwright-core";
+import { chromium, type Browser, type WebSocket } from "playwright-core";
 import { strict as assert } from "node:assert";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -8,7 +8,94 @@ const artifacts = resolve(root, ".tmp/browser");
 await mkdir(artifacts, { recursive: true });
 const logPath = resolve(artifacts, "live-server.log");
 await Bun.write(logPath, "");
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({ headless: true, ignoreDefaultArgs: ["--disable-back-forward-cache"] });
+
+const verifyStartupFailure = async (browser: Browser, variant: string): Promise<void> => {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });
+  page.setDefaultTimeout(5_000);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const failure = Promise.withResolvers<void>();
+  let disabled: boolean[] = [];
+  let failureStatus: string | null = null;
+  try {
+    await page.route("**/api/items/42?*", async (route) => {
+      await failure.promise;
+      await route.fulfill({ status: 503, contentType: "text/plain", body: "Startup unavailable" });
+    });
+    const request = page.waitForRequest("**/api/items/42?*");
+    await page.goto(`http://127.0.0.1:3217${variant === "browser" ? "/" : "/reference"}`);
+    await request;
+    disabled = await Promise.all(["Increment", "Dispose resources"].map((name) => page.getByRole("button", { name, exact: true }).isDisabled()));
+    failure.resolve();
+    const status = page.getByRole("status").filter({ hasText: /^Startup failed: / });
+    await status.waitFor();
+    failureStatus = await status.textContent();
+    assert.equal(failureStatus, "Startup failed: Startup unavailable. Reload this page to try again.");
+    assert.deepEqual(disabled, [true, true]);
+    assert.equal(await page.getByText("Item unavailable.", { exact: true }).isVisible(), true);
+    for (const name of ["Increment", "Dispose resources"]) assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true);
+    await page.screenshot({ path: resolve(artifacts, `${variant}-startup-failure-desktop.png`), fullPage: true });
+    await page.setViewportSize({ width: 360, height: 900 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
+    await page.screenshot({ path: resolve(artifacts, `${variant}-startup-failure-mobile.png`), fullPage: true });
+    await page.unroute("**/api/items/42?*");
+    await page.reload();
+    await page.getByRole("status").filter({ hasText: /^Ready$/ }).waitFor();
+    await page.getByRole("button", { name: "Increment", exact: true }).click();
+    assert.equal(await page.getByRole("status").filter({ hasText: /^1$/ }).textContent(), "1");
+    assert.deepEqual(errors, []);
+  } finally {
+    failure.resolve();
+    await Bun.write(resolve(artifacts, `${variant}-startup-evidence.json`), `${JSON.stringify({ disabledDuringStartup: disabled, failureStatus, finalStatus: await page.getByRole("status").last().textContent(), errors }, null, 2)}\n`);
+    await page.close();
+  }
+};
+
+const verifyHistory = async (browser: Browser, variant: string): Promise<void> => {
+  const page = await browser.newPage();
+  page.setDefaultTimeout(5_000);
+  page.setDefaultNavigationTimeout(5_000);
+  const errors: string[] = [];
+  const sockets: WebSocket[] = [];
+  page.on("websocket", (socket) => sockets.push(socket));
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    await page.goto(`http://127.0.0.1:3217${variant === "browser" ? "/" : "/reference"}`);
+    await page.getByRole("status").filter({ hasText: /^Ready$/ }).waitFor();
+    await page.getByRole("button", { name: "Increment", exact: true }).click();
+    await page.goto("http://127.0.0.1:3217/health");
+    await page.goBack();
+    await page.getByRole("status").filter({ hasText: /^Ready$/ }).waitFor();
+    await page.getByRole("button", { name: "Increment", exact: true }).click();
+    assert.equal(await page.getByRole("status").filter({ hasText: /^1$/ }).textContent(), "1");
+    const historyNavigation = await page.evaluate(() => performance.getEntriesByType("navigation").map((entry) => entry instanceof PerformanceNavigationTiming ? entry.type : "unknown"));
+    assert.deepEqual(historyNavigation, ["back_forward"]);
+    await page.getByText("Rust server log\nsecond line", { exact: true }).waitFor();
+    // Chromium's delegate/WebSocket policy prevents BFcache here. Explicit events cover the persisted branch only.
+    const socket = sockets.at(-1);
+    assert.ok(socket);
+    const closed = socket.waitForEvent("close");
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+    await closed;
+    await page.getByRole("button", { name: "Increment", exact: true }).click();
+    assert.equal(await page.getByRole("status").filter({ hasText: /^1$/ }).textContent(), "1");
+    const navigation = page.waitForNavigation({ waitUntil: "load" });
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
+    await navigation;
+    await page.getByRole("status").filter({ hasText: /^Ready$/ }).waitFor();
+    await page.getByText("Rust server log\nsecond line", { exact: true }).waitFor();
+    const persistedNavigation = await page.evaluate(() => performance.getEntriesByType("navigation").map((entry) => entry instanceof PerformanceNavigationTiming ? entry.type : "unknown"));
+    assert.deepEqual(persistedNavigation, ["reload"]);
+    assert.equal(await page.getByRole("status").filter({ hasText: /^0$/ }).textContent(), "0");
+    await page.getByRole("button", { name: "Increment", exact: true }).click();
+    assert.equal(await page.getByRole("status").filter({ hasText: /^1$/ }).textContent(), "1");
+    assert.deepEqual(errors, []);
+    await Bun.write(resolve(artifacts, `${variant}-history-evidence.json`), `${JSON.stringify({ historyNavigation, persistedNavigation, persistedEventReload: true, realCachedRestore: false, errors }, null, 2)}\n`);
+  } finally {
+    await page.close();
+  }
+};
 try {
   const server = Bun.spawn(
     [resolve(import.meta.dir, "examples/demo/target/debug/browser-demo-server")],
@@ -24,6 +111,18 @@ try {
     const response = await fetch("http://127.0.0.1:3217/health");
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "ready");
+    const lifecycleFailures: unknown[] = [];
+    for (const variant of ["browser", "reference"]) {
+      for (const journey of [verifyStartupFailure, verifyHistory]) {
+        try {
+          await journey(browser, variant);
+        } catch (error: unknown) {
+          console.error(`${variant}/${journey.name}`, error);
+          lifecycleFailures.push(error);
+        }
+      }
+    }
+    if (lifecycleFailures.length > 0) throw new AggregateError(lifecycleFailures, "Lifecycle regressions failed");
     const displayed: { readonly transport: string; readonly validation: string }[] = [];
     for (const variant of ["browser", "reference"]) {
       const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } });

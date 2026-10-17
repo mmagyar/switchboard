@@ -10,6 +10,8 @@ Acceptance remains blocked on explicit decisions for BREW handling, generated Un
 
 Open [comparison.html](comparison.html) directly in a browser for side-by-side cocktail routes, contracts, authorization, forms, server HTML, clients, streaming and hosting. The self-contained page needs no build, JavaScript, WASM or external assets. Its examples adapt the nearby What's in my bar? application without changing it.
 
+The hosted guide is at [dev.magyar.studio](https://dev.magyar.studio/). [comparison.Caddyfile](comparison.Caddyfile) defines its static Caddy site. The public root `/srv/dev.magyar.studio` contains only the HTML guide and its linked source/documentation references; the repository, build output and private files stay outside it. Install the site configuration as `/etc/caddy/dev.magyar.studio.caddy` and import it from the main Caddyfile, then validate and reload Caddy.
+
 With the [browser verification dependencies](browser/README.md) and Chromium installed, run `bun rust/browser/comparison.ts` from the repository root. It verifies JavaScript-disabled navigation, disclosure and keyboard scrolling, source links, local-file opening and layouts at 320, 768, 1024 and 1440 pixels. Screenshots are written to `.tmp/comparison/`.
 
 ## Build and test

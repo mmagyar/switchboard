@@ -14,7 +14,10 @@ use std::{
     net::SocketAddr,
     path::PathBuf,
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -268,12 +271,13 @@ pub async fn serve(
                             let idle = config.idle_timeout;
                             connections.spawn(async move {
                                 let io = IdleIo::new(stream, idle);
+                                let http_idle_enabled = io.enabled.clone();
                                 if let Some(tls) = tls {
                                     match tls.accept(io).await {
-                                        Ok(stream) => connection(stream, state, None).await,
+                                        Ok(stream) => connection(stream, state, None, http_idle_enabled).await,
                                         Err(error) => tracing::debug!(%error, "TLS connection failed"),
                                     }
-                                } else { connection(io, state, None).await; }
+                                } else { connection(io, state, None, http_idle_enabled).await; }
                             });
                         }
                         Err(error) => { tracing::error!(%error, "accept failed"); break; }
@@ -285,7 +289,11 @@ pub async fn serve(
                             let state = state.clone();
                             let idle = config.idle_timeout;
                             let port = config.redirect.as_ref().expect("redirect config").https_port;
-                            connections.spawn(async move { connection(IdleIo::new(stream, idle), state, Some(port)).await; });
+                            connections.spawn(async move {
+                                let io = IdleIo::new(stream, idle);
+                                let http_idle_enabled = io.enabled.clone();
+                                connection(io, state, Some(port), http_idle_enabled).await;
+                            });
                         }
                         Err(error) => { tracing::error!(%error, "redirect accept failed"); break; }
                     }
@@ -315,8 +323,12 @@ struct State {
     max_request_body_size: usize,
 }
 
-async fn connection<T>(io: T, state: Arc<State>, redirect: Option<u16>)
-where
+async fn connection<T>(
+    io: T,
+    state: Arc<State>,
+    redirect: Option<u16>,
+    http_idle_enabled: Arc<AtomicBool>,
+) where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let (upgrade_tx, mut upgrade_rx) = mpsc::channel::<(OnUpgrade, broadcast::Receiver<String>)>(1);
@@ -400,23 +412,45 @@ where
     if let Ok((upgrade, mut messages)) = upgrade_rx.try_recv() {
         match upgrade.await {
             Ok(upgraded) => {
+                // The HTTP timer lives below TLS and must stop governing the upgraded transport.
+                http_idle_enabled.store(false, Ordering::Relaxed);
                 let mut ws =
                     WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, None)
                         .await;
+                let idle_timeout = Duration::from_secs(120);
+                let ping_interval = idle_timeout / 2;
+                let idle = sleep(idle_timeout);
+                let ping = sleep(ping_interval);
+                tokio::pin!(idle, ping);
                 loop {
                     tokio::select! {
-                        event = ws.next() => match event {
-                            Some(Ok(Message::Text(_) | Message::Binary(_))) => {
-                                if let Some(read) = &state.options.read_logs {
-                                    match read().await {
-                                        Ok(logs) => if ws.send(Message::Text(logs.into())).await.is_err() { break; },
-                                        Err(error) => tracing::warn!(%error, "reading logs failed"),
+                        _ = &mut idle => {
+                            let _ = ws.close(None).await;
+                            break;
+                        }
+                        event = ws.next() => {
+                            if matches!(event, Some(Ok(_))) {
+                                idle.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
+                                ping.as_mut().reset(tokio::time::Instant::now() + ping_interval);
+                            }
+                            match event {
+                                Some(Ok(Message::Text(_) | Message::Binary(_))) => {
+                                    if let Some(read) = &state.options.read_logs {
+                                        match read().await {
+                                            Ok(logs) => if ws.send(Message::Text(logs.into())).await.is_err() { break; },
+                                            Err(error) => tracing::warn!(%error, "reading logs failed"),
+                                        }
                                     }
                                 }
+                                Some(Ok(Message::Ping(_))) => if ws.flush().await.is_err() { break; },
+                                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                                _ => {}
                             }
-                            Some(Ok(Message::Ping(_))) => if ws.flush().await.is_err() { break; },
-                            Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                            _ => {}
+                        },
+                        _ = &mut ping => {
+                            if ws.send(Message::Ping(bytes::Bytes::new())).await.is_err() { break; }
+                            // A silent peer must reach the idle deadline before another ping is due.
+                            ping.as_mut().reset(tokio::time::Instant::now() + idle_timeout);
                         },
                         message = messages.recv() => match message {
                             Ok(message) => if ws.send(Message::Text(message.into())).await.is_err() { break; },
@@ -602,6 +636,7 @@ struct IdleIo<T> {
     io: Pin<Box<T>>,
     timer: Pin<Box<Sleep>>,
     timeout: Duration,
+    enabled: Arc<AtomicBool>,
 }
 impl<T> IdleIo<T> {
     fn new(io: T, timeout: Duration) -> Self {
@@ -609,6 +644,7 @@ impl<T> IdleIo<T> {
             io: Box::pin(io),
             timer: Box::pin(sleep(timeout)),
             timeout,
+            enabled: Arc::new(AtomicBool::new(true)),
         }
     }
     fn activity(&mut self) {
@@ -617,7 +653,9 @@ impl<T> IdleIo<T> {
             .reset(tokio::time::Instant::now() + self.timeout);
     }
     fn expired(&mut self, cx: &mut Context<'_>) -> bool {
-        !self.timeout.is_zero() && self.timer.as_mut().poll(cx).is_ready()
+        self.enabled.load(Ordering::Relaxed)
+            && !self.timeout.is_zero()
+            && self.timer.as_mut().poll(cx).is_ready()
     }
 }
 impl<T: AsyncRead> AsyncRead for IdleIo<T> {
@@ -946,6 +984,123 @@ mod tests {
         assert_closed(partial).await;
         let rebound = TcpListener::bind(addr).await.unwrap();
         assert_eq!(rebound.local_addr().unwrap(), addr);
+        handle.stop().await.unwrap();
+    }
+
+    async fn advance_network_clock(duration: Duration) {
+        // Real sockets need the clock running while awaiting OS readiness.
+        tokio::time::pause();
+        tokio::time::advance(duration).await;
+        tokio::time::resume();
+    }
+
+    async fn websocket_ready<T: AsyncRead + AsyncWrite + Unpin>(ws: &mut WebSocketStream<T>) {
+        ws.send(Message::Ping(b"ready".to_vec().into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            timeout(BUDGET, ws.next()).await.unwrap().unwrap().unwrap(),
+            Message::Pong(b"ready".to_vec().into())
+        );
+    }
+
+    async fn delayed_reload<T: AsyncRead + AsyncWrite + Unpin>(
+        handle: &ServerHandle,
+        ws: &mut WebSocketStream<T>,
+    ) {
+        websocket_ready(ws).await;
+        advance_network_clock(Duration::from_secs(11)).await;
+        handle.reload();
+        assert_eq!(
+            timeout(BUDGET, ws.next()).await.unwrap().unwrap().unwrap(),
+            Message::Text("RELOAD".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn quiet_websocket_survives_http_idle_and_receives_delayed_reload() {
+        let mut handle = serve(config(), router(), ServerOptions::default())
+            .await
+            .unwrap();
+        let (mut ws, _) = connect_async(format!("ws://{}/reload", handle.local_addr()))
+            .await
+            .unwrap();
+        delayed_reload(&handle, &mut ws).await;
+        handle.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn quiet_tls_websocket_survives_http_idle_and_receives_delayed_reload() {
+        let generated = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert = generated.cert.pem();
+        let mut conf = config();
+        conf.https = Some(Https::Pem {
+            cert: cert.clone(),
+            key: generated.signing_key.serialize_pem(),
+        });
+        let mut handle = serve(conf, router(), ServerOptions::default())
+            .await
+            .unwrap();
+        let (mut ws, _) = client_async(
+            "wss://localhost/reload",
+            tls_stream(handle.local_addr(), &cert).await,
+        )
+        .await
+        .unwrap();
+        delayed_reload(&handle, &mut ws).await;
+        handle.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_automatic_pings_keep_responsive_peers_alive_past_120_seconds() {
+        let mut conf = config();
+        conf.idle_timeout = Duration::ZERO;
+        let mut handle = serve(conf, router(), ServerOptions::default())
+            .await
+            .unwrap();
+        let (mut ws, _) = connect_async(format!("ws://{}/reload", handle.local_addr()))
+            .await
+            .unwrap();
+        websocket_ready(&mut ws).await;
+        for _ in 0..3 {
+            advance_network_clock(Duration::from_secs(60)).await;
+            assert_eq!(
+                timeout(BUDGET, ws.next()).await.unwrap().unwrap().unwrap(),
+                Message::Ping(bytes::Bytes::new())
+            );
+            ws.flush().await.unwrap();
+            websocket_ready(&mut ws).await;
+        }
+        handle.reload();
+        assert_eq!(
+            timeout(BUDGET, ws.next()).await.unwrap().unwrap().unwrap(),
+            Message::Text("RELOAD".into())
+        );
+        handle.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn websocket_idle_timeout_closes_unresponsive_peer_at_120_seconds() {
+        let mut conf = config();
+        conf.idle_timeout = Duration::ZERO;
+        let mut handle = serve(conf, router(), ServerOptions::default())
+            .await
+            .unwrap();
+        let (mut ws, _) = connect_async(format!("ws://{}/reload", handle.local_addr()))
+            .await
+            .unwrap();
+        websocket_ready(&mut ws).await;
+        advance_network_clock(Duration::from_secs(60)).await;
+        assert_eq!(
+            timeout(BUDGET, ws.next()).await.unwrap().unwrap().unwrap(),
+            Message::Ping(bytes::Bytes::new())
+        );
+        // Leave the automatically queued pong unsent to model an unresponsive peer.
+        advance_network_clock(Duration::from_secs(60)).await;
+        assert!(matches!(
+            timeout(BUDGET, ws.next()).await.unwrap(),
+            Some(Ok(Message::Close(_))) | Some(Err(_)) | None
+        ));
         handle.stop().await.unwrap();
     }
 

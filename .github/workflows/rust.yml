@@ -29,6 +29,7 @@ jobs:
             rust/macros -> target
             rust/typecheck -> target
             rust/browser/examples/demo -> target
+            rust/browser/fixtures/decode-probe -> target
       - run: bun install --frozen-lockfile
       - run: bun run check && bunx tsc -p rust/compat/tsconfig.json && bunx tsc -p rust/compat/schema/tsconfig.json && bunx tsc -p rust/bench/tsconfig.json && bun test
       - run: cargo fmt --manifest-path rust/Cargo.toml --check
@@ -62,9 +63,12 @@ jobs:
           cargo build --manifest-path rust/browser/examples/demo/Cargo.toml --release --target wasm32-unknown-unknown --lib --locked
           .tmp/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen --target web --out-dir rust/browser/examples/demo/static/generated --out-name demo rust/browser/examples/demo/target/wasm32-unknown-unknown/release/switchboard_browser_demo.wasm
           cargo build --manifest-path rust/browser/examples/demo/Cargo.toml --features server --bin browser-demo-server --locked
-          bunx tsc --ignoreConfig --noEmit --strict --skipLibCheck --target ESNext --module ESNext --moduleResolution bundler --allowImportingTsExtensions --types bun rust/browser/integration.ts rust/browser/reference.ts rust/browser/measure.ts
+          cargo build --manifest-path rust/browser/fixtures/decode-probe/Cargo.toml --release --target wasm32-unknown-unknown --locked
+          .tmp/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl/wasm-bindgen --target web --out-dir .tmp/browser-decode/generated --out-name probe rust/browser/fixtures/decode-probe/target/wasm32-unknown-unknown/release/switchboard_browser_decode_probe.wasm
+          bunx tsc --ignoreConfig --noEmit --strict --skipLibCheck --target ESNext --module ESNext --moduleResolution bundler --allowImportingTsExtensions --types bun rust/browser/integration.ts rust/browser/reference.ts rust/browser/measure.ts rust/browser/decoder-probe.ts rust/browser/fixtures/decode-probe/reference.ts
           bun rust/browser/measure.ts
           bun rust/browser/integration.ts
+          bun rust/browser/decoder-probe.ts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -72,6 +76,7 @@ jobs:
           path: |
             .tmp/browser/
             .tmp/schema-ci/
+            .tmp/browser-decode/
 
   minimum-rust:
     runs-on: ubuntu-latest
@@ -83,3 +88,4 @@ jobs:
           targets: wasm32-unknown-unknown
       - run: cargo check --manifest-path rust/Cargo.toml --all-features --all-targets --locked
       - run: cargo check --manifest-path rust/browser/Cargo.toml --target wasm32-unknown-unknown --locked
+      - run: cargo check --manifest-path rust/browser/fixtures/decode-probe/Cargo.toml --target wasm32-unknown-unknown --locked

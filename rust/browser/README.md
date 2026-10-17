@@ -84,6 +84,8 @@ Raw `call` remains available with its original signature. It validates only the 
 - A successful effective HEAD or DELETE, or status 204/205, returns `None` without consuming or validating a body. An empty non-JSON body also returns `None`. An empty body advertised as JSON is invalid. JSON null deserialized as `Value` returns `Some(Value::Null)`.
 - There is no validation opt-out that claims a typed result. Use `call_route_unchecked` or request `Value` from raw `call`. GET/HEAD bodies and forbidden methods are rejected by browser fetch and classified as `Network`/0, matching the original client. Auth callbacks remain outside transport error mapping.
 
+Successful JSON uses the original native `Response.json()` call before entering the shared finite Rust JSON boundary. Native malformed/empty JSON diagnostics remain intact; no response clone or diagnostic-prefix normalization is used. Parsed numbers reach schema callbacks and serde with ECMAScript precision, and negative-zero leaves remain negative zero. Nonfinite leaves, lone UTF-16 surrogates and excessive JSON nesting retain the documented Rust boundaries.
+
 ## Event and WebSocket ownership
 
 `EventListener::new(&EventTarget, event, callback)` registers an ordinary non-capturing DOM listener. It owns the closure and removes the listener on `close()` or `Drop`. Keep the handle in your application's Rust-owned page/component state. Dropping a local handle immediately removes its listener. `close()` is idempotent and reports browser removal errors; on removal failure it retains the callback for a retry. Standard DOM removal does not throw; Drop logs unexpected cleanup errors to the browser console.
@@ -165,7 +167,7 @@ Record the exact Rust/wasm-bindgen versions, build profile, enabled features, ap
 
 ## Linkable demo and real-browser proof
 
-[`examples/demo`](examples/demo) contains a linkable Rust WASM application, shared typed contracts and a live Rust/Maud HTTP server. The same contract function is used by `bind_typed` on the server and `call_route` in the browser. The deliberate invalid-output endpoint returns serde-compatible JSON that violates the shared title literal. The page displays its schema rejection and the unchecked JSON, a counter, resource disposal and WebSocket logs. The only authored JavaScript product file initializes WASM and frees the Rust page owner on `pagehide`. All fetch work is awaited. Rust listeners/connections belong to the exported `Page`; closing resources removes the counter listener and closes the socket. No `Closure::forget` is used.
+[`examples/demo`](examples/demo) contains a linkable Rust WASM application, shared typed contracts and a live Rust/Maud HTTP server. The same contract function is used by `bind_typed` on the server and `call_route` in the browser. The deliberate invalid-output endpoint returns serde-compatible JSON that violates the shared title literal. The page displays its schema rejection and the unchecked JSON, a counter, resource disposal and WebSocket logs. The minimal JavaScript bootstrap initializes WASM, frees the Rust page owner on `pagehide`, and reloads on persisted `pageshow`. Rust renders API-startup failures with reload instructions and leaves controls disabled until listeners are installed. All fetch work is awaited. Rust listeners/connections belong to the exported `Page`; closing resources removes the counter listener and closes the socket. No `Closure::forget` is used.
 
 Exact commands from the repository root (wasm-bindgen CLI must match lockfile 0.2.129):
 
@@ -193,7 +195,20 @@ Playwright-core 1.60.0 requires a local matching Chromium installation, for exam
 
 Evidence is emitted under repository `.tmp/browser/`: `browser-evidence.json`, `reference-evidence.json`, `browser-desktop.png`, `browser-mobile.png`, `reference-desktop.png`, `reference-mobile.png`, `live-server.log` and `artifact-sizes.json`. Generated application bindings and WASM stay under ignored `examples/demo/static/generated/`; build them with the commands above.
 
-The measured linked application (release `opt-level=s`, LTO, one codegen unit, debug stripping; wasm-bindgen 0.2.129; Bun 1.4.0) is **567,176 bytes raw / 165,411 gzip** WASM and **24,669 / 5,514** generated JS. Their total is **591,845 / 170,925**, or **592,010 / 171,073** including the bootstrap. The comparable minified original-client reference JS is **291,059 / 66,509**. Gzip is level 9, applied independently per HTTP resource with no filename/timestamp metadata. Shared HTML/CSS, declaration files and source maps are excluded from both totals. These numbers establish no Rust size advantage. Standalone unbound crate size is not representative.
+The refreshed linked application (release `opt-level=s`, LTO, one codegen unit, debug stripping; wasm-bindgen 0.2.129; Bun 1.4.0) is **598,367 bytes raw / 172,875 gzip** WASM and **26,440 / 5,798** generated JS. Their total is **624,807 / 178,673**, or **625,075 / 178,861** including the bootstrap. The comparable minified original-client reference JS is **291,595 / 66,684**. Gzip is level 9, applied independently per HTTP resource with no filename/timestamp metadata. Shared HTML/CSS, declaration files and source maps are excluded from both totals. These numbers establish no Rust size advantage. Standalone unbound crate size is not representative.
+
+The public [`fixtures/decode-probe`](fixtures/decode-probe) consumer and `decoder-probe.ts` exercise the actual browser client and typed-route APIs without production test hooks:
+
+```sh
+cargo build --manifest-path rust/browser/fixtures/decode-probe/Cargo.toml --release --target wasm32-unknown-unknown --locked
+wasm-bindgen --target web --out-dir .tmp/browser-decode/generated --out-name probe \
+  rust/browser/fixtures/decode-probe/target/wasm32-unknown-unknown/release/switchboard_browser_decode_probe.wasm
+bun rust/browser/decoder-probe.ts
+```
+
+All 19 probes passed in Chromium. They cover numeric precision before callbacks/serde, nested negative zero, exact malformed/empty JSON diagnostics, auth statuses, fetch initialization failures, Rust type errors and the explicit finite/Unicode/nesting limits. Empty network streams can produce different native diagnostic prefixes across independent calls. Deterministic fixtures compare exact messages, and the real-network empty fixture compares each call against its own captured native rejection. No prefix rewriting or retries are used. Evidence is under `.tmp/browser-decode/`.
+
+The updated application journeys also passed startup API failure/recovery and history navigation. Real back navigation loaded a fresh document. Chromium's WebSocket/delegate policy prevented actual BFcache restoration; explicit persisted events verified only the reload branch. Desktop/mobile success and startup-failure screenshots were inspected. WASM download/initialization failure remains outside this API-startup journey.
 
 Validation commands:
 

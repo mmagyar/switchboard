@@ -18,6 +18,7 @@ export const toZod = (schema: SchemaDsl): z.ZodType => {
     }
     case "enum": return z.enum(schema.value);
     case "object": return z.object(Object.fromEntries(Object.entries(schema.value).map(([key, value]) => [key, toZod(value)])));
+    case "strictObject": return z.strictObject(Object.fromEntries(Object.entries(schema.value).map(([key, value]) => [key, toZod(value)])));
     case "array": return z.array(toZod(schema.value));
     case "union": return z.union(schema.value.map(toZod));
     case "optional": return toZod(schema.value).optional();

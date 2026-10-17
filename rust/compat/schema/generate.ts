@@ -19,7 +19,8 @@ export const extensionCases = (): SchemaCase[] => {
     { type: "tuple", value: [string, { type: "optional", value: number }] },
     { type: "tuple", value: [{ type: "array", value: { type: "tuple", value: [boolean, string] } }, { type: "nullable", value: number }] },
     { type: "file" },
-    ...(["map", "tuple", "open", "tree", "mutual", "containers"] as const).map(derived),
+    { type: "strictObject", value: { known: string } },
+    ...(["map", "tuple", "open", "tree", "mutual", "containers", "strict"] as const).map(derived),
   ];
   const inputs: Json[] = [
     null, false, 0, "", "2", [], ["a"], ["a", true], ["a", false, 2], ["a", "false", "2"], ["a", true, 2, "extra"],
@@ -68,6 +69,13 @@ export const extensionCases = (): SchemaCase[] => {
     [derived("tree"), "name=root&children.0.name=child&children.0.children.0.name=leaf"],
     [derived("open"), "known=a&x=2"],
   ] satisfies [SchemaDsl, string][]) cases.push({ op: "url", schema, path: "/search", url: `http://example.test/search?${query}` });
+  const tupleUnion: SchemaDsl = { type: "union", value: [{ type: "tuple", value: [number] }, string] };
+  const nestedStrict: SchemaDsl = object({ child: { type: "strictObject", value: { known: string } } });
+  const nestedStrictInputs: Json[] = [{ child: { known: "ok" } }, { child: { known: "ok", extra: true } }, { child: { known: 1, extra: true } }, { child: {} }];
+  cases.push(
+    ...[[], [1, 2], ["bad", 2], 1, "ok", [1]].map((input): SchemaCase => ({ op: "parse", schema: tupleUnion, input })),
+    ...nestedStrictInputs.map((input): SchemaCase => ({ op: "parse", schema: nestedStrict, input })),
+  );
   return cases.map((input) => caseSchema.parse(input));
 };
 

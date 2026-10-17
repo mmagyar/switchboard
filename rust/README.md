@@ -4,6 +4,8 @@ This directory contains a native Rust implementation beside the unchanged Bun/Ty
 
 The implementation uses safe authored Rust (`#![forbid(unsafe_code)]`). Established dependencies include native cryptography and may use unsafe internals. This is a language-safety guarantee, not a claim that every dependency or application is free of vulnerabilities.
 
+Acceptance remains blocked on explicit decisions for BREW handling, generated Unicode lengths, large-radix rounding and Bun's string-backed BOM constructor behavior. Automatic question-timeout selections granted no exceptions. The integrated remediation passes compilation, unit, feature, MSRV and browser checks; strict HTTP and the unfiltered radix audit remain red. [VERIFICATION.md](VERIFICATION.md) records the current results and separates historical measurements.
+
 ## Build and test
 
 From the repository root, with Rust and Bun installed:
@@ -79,7 +81,7 @@ let route = switchboard::route!(get, "/items/:itemId/:slug?", "public", String)?
 
 The macro checks literal paths, optional ordering, parameter names and prefixes at compile time. `:itemId` and `:item_id` infer numbers. See [macros/README.md](macros/README.md) for body methods, keyword fields and renamed dependencies. Named shared structs are preferable when clients need to construct parameter values or contracts span modules.
 
-`RouteDef` and `HandlerDefiner::bind` expose the dynamic `Schema`/`serde_json::Value` API. Runtime schemas support objects, arrays, unions, literals, enums, defaults, catches, nullability, optionality, records, heterogeneous tuples, open objects, recursive generated references, and Rust refinements/transforms/preprocessors. `Schema::from_type` returns an error for unsupported JSON-schema keywords, patterns or formats. An explicit Rust refinement can express application validators. Unsupported rules are never silently dropped.
+`RouteDef` and `HandlerDefiner::bind` expose the dynamic `Schema`/`serde_json::Value` API. Runtime schemas support stripping and strict objects, arrays, unions, literals, enums, defaults, catches, nullability, optionality, records, heterogeneous tuples, open objects, recursive generated references, and Rust refinements/transforms/preprocessors. `Schema::from_type` returns an error for unsupported JSON-schema keywords, patterns or formats. An explicit Rust refinement can express application validators. Unsupported rules are never silently dropped.
 
 ## Hosting and ownership
 
@@ -99,11 +101,11 @@ server.stop().await?;
 
 `serve` supports HTTP, PEM TLS or cached self-signed development certificates, optional HTTP-to-HTTPS redirects, access-log callbacks, log watching and WebSocket upgrades at arbitrary paths. For unprivileged development TLS, set an explicit HTTPS port and `redirect: None`, or choose an unprivileged redirect port. `Https::Generate` defaults to localhost and `.genCert`; generated certificates are development credentials. Supply trusted PEM material for production.
 
-`ServerHandle::reload()` broadcasts exact `RELOAD` text. Any client text message requests logs when log delivery is configured. Native code changes require rebuilding/restarting the executable; Bun's in-process module HMR is runtime-specific. A file watcher or development process supervisor can trigger the exposed reload operation. The browser helper does not impose a reconnection policy.
+`ServerHandle::reload()` broadcasts exact `RELOAD` text. Any client text message requests logs when log delivery is configured. Native code changes require rebuilding/restarting the executable; Bun's in-process module HMR is runtime-specific. A file watcher or development process supervisor can trigger the exposed reload operation. The browser helper does not impose a reconnection policy. Hosting uses a separate 120-second WebSocket idle deadline and 60-second pings; the HTTP timeout does not terminate quiet responsive sockets.
 
 Dropping a server initiates shutdown. Await `stop()` to join connections and guarantee listener reuse. The server cancels open/pending requests on stop. Formatter validation is owned by the definer: stop accepting requests, then `drain_background().await` to complete it, or `cleanup_background().await` to abort and join pending work. Dropping the last definer owner aborts pending validation; dropping one clone does not abort another clone's work. Late streaming failures are logged and returned by draining, after already-sent headers remain fixed.
 
-`RequestContext.uploads` retains uploaded field names, filenames, content types and bytes. Use `bind_with_context` when a handler needs files or request metadata. Filenames and MIME declarations remain untrusted application input. Multipart bodies are collected in memory, so applications should enforce request/file-size limits at their deployment boundary.
+`RequestContext.uploads` retains uploaded field names, filenames, content types and bytes. Use `bind_with_context` when a handler needs files or request metadata. Filenames and MIME declarations remain untrusted application input. Multipart bodies are collected in memory. `ServerConfig.max_request_body_size` defaults to 128 MiB; zero permits only empty bodies. The cap counts bytes lazily as handlers consume them, without pre-auth buffering, and parser limit errors return 413. Applications should choose suitable total-body, file and concurrency policies.
 
 ## Rendering and streaming
 
@@ -137,16 +139,16 @@ cargo build --manifest-path rust/Cargo.toml --release --all-features --bin compa
 bun rust/compat/check.ts ./rust/target/release/compat-runner
 ```
 
-The current 94-case corpus calls the actual routing/handler APIs in memory and compares response statuses, application headers, bodies, registration errors, URLs, complete validation messages/issues, output warnings and logged errors. Live HTTP/TLS/WebSocket tests and the benchmark exercise transport separately. Four integration cases cover multipart File identity and a nested unresolved-Promise warning. Only documented transport-generated headers are excluded. The checker leaves mismatches visible and exits nonzero for any difference.
+The current 103-case corpus calls the actual routing/handler APIs in memory and compares response statuses, application headers, bodies, registration errors, URLs, complete validation messages/issues, output warnings and logged errors. Live HTTP/TLS/WebSocket tests and the benchmark exercise transport separately. Four integration cases cover multipart File identity and a nested unresolved-Promise warning. Only documented transport-generated headers are excluded. The checker leaves mismatches visible and exits nonzero for any difference.
 
-The integrated result matches 93 of 94 cases. `method-unsupported` exposes Bun 1.4's Request-constructor quirk: custom `BREW` becomes GET before reaching the reference router. Rust preserves the method and returns 405. TRACE agrees at 405 in the corpus. This remains an unresolved runtime difference. Default strict checking exits nonzero; `--portable-only` explicitly reports and excludes only that case:
+The integrated result matches 101 of 103 cases. `method-unsupported` exposes Bun 1.4's Request-constructor quirk: custom `BREW` becomes GET before reaching the reference router. Rust preserves the method and returns 405. `request-leading-bom` exposes another constructor difference: Bun rejects BOM-prefixed JSON from a string-backed Request but accepts the same byte-backed and real HTTP request; Rust accepts its byte body. TRACE agrees at 405. Both compatibility policies remain unresolved. Default strict checking exits nonzero; `--portable-only` excludes only BREW and still fails on the retained BOM case:
 
 ```sh
 bun rust/compat/check.ts --portable-only ./rust/target/release/compat-runner
-# {"cases":93,"mismatches":0,"excludedRuntimeCases":["method-unsupported"]}
+# {"cases":102,"mismatches":1,"excludedRuntimeCases":["method-unsupported"]}
 ```
 
-The separate schema/parameter gate preserves the original 3,103 cases and adds 564 portable cases. All **3,667** match with complete issue arrays/messages and missing-value distinctions. A separate **12-case** audit exercises the explicit safety bounds and reports those intentional boundaries independently:
+The separate schema/parameter gate preserves the original 3,103 cases and adds 638 portable cases. All **3,741** match with complete issue arrays/messages and missing-value distinctions. A separate **12-case** audit exercises the explicit safety bounds and reports those intentional boundaries independently:
 
 ```sh
 cargo build --manifest-path rust/Cargo.toml --bin schema-runner
@@ -154,7 +156,7 @@ bun rust/compat/schema/check.ts .tmp/schema-gate ./rust/target/debug/schema-runn
 bun rust/compat/schema/bounds.ts .tmp/schema-gate ./rust/target/debug/schema-runner
 ```
 
-The [schema protocol](compat/schema/README.md) documents the finite model and stored artifacts. Numeric JSON serialization follows IEEE-754/ECMAScript rules; use strings for opaque or full-width integer identifiers.
+The [schema protocol](compat/schema/README.md) documents the finite model and stored artifacts. Numeric JSON decoding at HTTP/client boundaries and serialization follow finite IEEE-754/ECMAScript semantics before application decisions; use strings for opaque or full-width integer identifiers. A separate unfiltered large-radix audit reports 124 mismatches in 768 cases for the integrated parser. The isolated exact-rounding checkpoint reports 75 and remains unintegrated pending policy approval. These findings are outside the stored schema corpus and block acceptance; they are not safety-bound exceptions.
 
 Safety and representation boundaries are explicit:
 

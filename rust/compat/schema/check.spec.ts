@@ -13,8 +13,8 @@ describe("schema strict differential gate", () => {
   test("preserves all 3103 scratch cases and generates validated portable extensions deterministically", async () => {
     const corpus = await generateCorpus();
     const cases = parseLines(corpus, caseSchema);
-    expect(cases).toHaveLength(3667);
-    expect(extensionCases()).toHaveLength(564);
+    expect(cases).toHaveLength(3741);
+    expect(extensionCases()).toHaveLength(638);
     expect(await generateCorpus()).toBe(corpus);
     expect(cases[0]).toEqual(input);
     expect(cases[3102]).toEqual({ op: "form", schema: { type: "object", value: { n: { type: "number" } } }, input: { n: "1000000000000000128" } });
@@ -58,12 +58,12 @@ describe("schema strict differential gate", () => {
     try {
       expect(await check(directory, [process.execPath, new URL("./reference.ts", import.meta.url).pathname])).toBe(0);
       const raw: unknown = JSON.parse(await Bun.file(join(directory, "summary.json")).text());
-      const summary = z.strictObject({ cases: z.literal(3667), sourceCases: z.literal(3103), extensionCases: z.literal(564), mismatches: z.literal(0) }).parse(raw);
+      const summary = z.strictObject({ cases: z.literal(3741), sourceCases: z.literal(3103), extensionCases: z.literal(638), mismatches: z.literal(0) }).parse(raw);
       expect(summary.mismatches).toBe(0);
       expect(await Bun.file(join(directory, "mismatches.ndjson")).text()).toBe("");
       const cases = parseLines(await Bun.file(join(directory, "cases.ndjson")).text(), caseSchema);
-      expect(validateOutput(await Bun.file(join(directory, "reference.ndjson")).text(), cases)).toHaveLength(3667);
-      expect(validateOutput(await Bun.file(join(directory, "rust.ndjson")).text(), cases)).toHaveLength(3667);
+      expect(validateOutput(await Bun.file(join(directory, "reference.ndjson")).text(), cases)).toHaveLength(3741);
+      expect(validateOutput(await Bun.file(join(directory, "rust.ndjson")).text(), cases)).toHaveLength(3741);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -75,14 +75,14 @@ describe("schema strict differential gate", () => {
     try {
       const commands = [
         { script: "process.exit(7)", error: "exited 7" },
-        { script: "await Bun.stdin.text(); console.log('{}')", error: "Expected 3667 results, received 1" },
-        { script: "await Bun.stdin.text(); console.log(Array(3667).fill('not-json').join('\\n'))", error: "JSON Parse error" },
-        { script: `await Bun.stdin.text(); console.log(Array(3667).fill('{"success":true,"present":true}').join('\\n'))`, error: "Result 0" },
+        { script: "await Bun.stdin.text(); console.log('{}')", error: "Expected 3741 results, received 1" },
+        { script: "await Bun.stdin.text(); console.log(Array(3741).fill('not-json').join('\\n'))", error: "JSON Parse error" },
+        { script: `await Bun.stdin.text(); console.log(Array(3741).fill('{"success":true,"present":true}').join('\\n'))`, error: "Result 0" },
       ];
       for (const { script, error } of commands) {
         expect(await check(directory, [process.execPath, "-e", script])).toBe(1);
         const raw: unknown = JSON.parse(await Bun.file(join(directory, "summary.json")).text());
-        const summary = z.strictObject({ cases: z.literal(3667), runnerFailures: z.literal(1), error: z.string().min(1) }).parse(raw);
+        const summary = z.strictObject({ cases: z.literal(3741), runnerFailures: z.literal(1), error: z.string().min(1) }).parse(raw);
         expect(summary.runnerFailures).toBe(1);
         expect(summary.error).toContain(error);
       }

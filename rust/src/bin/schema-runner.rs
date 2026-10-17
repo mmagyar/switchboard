@@ -69,6 +69,7 @@ enum DerivedName {
     Tree,
     Mutual,
     Containers,
+    Strict,
 }
 
 #[derive(JsonSchema)]
@@ -109,6 +110,13 @@ struct Containers {
     tuple: (String, String),
 }
 
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+struct StrictFields {
+    known: String,
+}
+
 impl Source {
     fn compile(self) -> Result<Schema, switchboard::DefinitionError> {
         match self {
@@ -120,6 +128,7 @@ impl Source {
                 DerivedName::Tree => Schema::from_type::<Tree>(),
                 DerivedName::Mutual => Schema::from_type::<MutualA>(),
                 DerivedName::Containers => Schema::from_type::<Containers>(),
+                DerivedName::Strict => Schema::from_type::<StrictFields>(),
             },
         }
     }

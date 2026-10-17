@@ -33,6 +33,7 @@ Schemas use Rust's adjacently tagged representation, with `type` and `value` key
 {"type":"literal","value":"fixed"}
 {"type":"enum","value":["red","blue"]}
 {"type":"object","value":{"id":{"type":"number"}}}
+{"type":"strictObject","value":{"id":{"type":"number"}}}
 {"type":"array","value":{"type":"number"}}
 {"type":"union","value":[{"type":"number"},{"type":"object","value":{}}]}
 {"type":"optional","value":{"type":"string"}}
@@ -42,7 +43,7 @@ Schemas use Rust's adjacently tagged representation, with `type` and `value` key
 {"type":"readonly","value":{"type":"string"}}
 ```
 
-The tuple `value` of default/catch is `[innerSchema, fallbackJson]`. Absent input and explicit null remain distinct. Object schemas strip unknown properties according to the reference. A literal accepts any JSON value in the wire schema; the reference rejects nonprimitive literals as unsupported protocol input. Enums and unions must be nonempty and have at least two entries respectively.
+The tuple `value` of default/catch is `[innerSchema, fallbackJson]`. Absent input and explicit null remain distinct. Object schemas strip unknown properties according to the reference. Strict-object schemas reject them with complete `unrecognized_keys` issues. A literal accepts any JSON value in the wire schema; the reference rejects nonprimitive literals as unsupported protocol input. Enums and unions must be nonempty and have at least two entries respectively.
 
 ## Cases
 
@@ -89,6 +90,6 @@ Each warning is `{message,issues,data,method,url}` with the complete Zod error m
 
 The corpus covers methods, explicit/fallback HEAD, misses/custom defaults, static-first fallback, optional/trailing paths, prefix rewriting (including form bodies and regex metacharacters), nested/repeated/indexed queries, path precedence, defaults/catch/readonly/nullable/unions/enums/literals, JSON and flat form bodies, auth precedence, error negotiation/parsers/HTML, custom formatting/redirects, output stripping/warnings, nested deferred objects/arrays and formatter pending values, route conflicts and URL generation. Invalid cases intentionally retain all reference validation details.
 
-Bun 1.4.0 has observable runtime-specific behavior: arbitrary unknown request methods such as BREW become GET when constructing a Request (TRACE remains TRACE and tests 405); an in-memory DELETE 204 can contain JSON bytes; encoded path segments remain percent-encoded in handler params; an empty prefix successfully registers. These observations remain visible in the corpus instead of being silently corrected to conventional HTTP behavior.
+Bun 1.4.0 has observable runtime-specific behavior: arbitrary unknown request methods such as BREW become GET when constructing a Request (TRACE remains TRACE and tests 405); an in-memory DELETE 204 can contain JSON bytes; encoded path segments remain percent-encoded in handler params; an empty prefix successfully registers. These observations remain visible in the corpus instead of being silently corrected to conventional HTTP behavior. The expanded corpus also retains Bun's string-backed BOM constructor difference: BOM-prefixed JSON returns 400 in that in-memory form, while byte-backed requests and real HTTP return 201. Rust's byte decoding accepts it. Strict checking reports both BREW and BOM mismatches; portable mode still excludes only BREW and remains red. No additional exception has received explicit approval.
 
 The corpus does not claim network-level streaming timing, rejected futures, client transport errors, TLS, WebSockets, browser behavior or safe sparse-array stress coverage. Those require separate product tests or a versioned extension. Sparse query cases here use small bounded indices. The optional full-HTTP benchmark is not part of this protocol. No performance numbers are fabricated by this tooling.

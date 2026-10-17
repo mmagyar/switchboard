@@ -9,6 +9,7 @@ const derivedSchema = (name: DerivedName): z.ZodType => {
   switch (name) {
     case "map": return z.record(z.string(), z.object({ count: z.number(), pairs: z.array(z.tuple([z.string(), z.boolean()])) }));
     case "tuple": return z.tuple([z.string(), z.boolean(), z.number()]);
+    case "strict": return z.strictObject({ known: z.string() });
     case "open": return z.object({ known: z.string() }).catchall(z.number());
     case "containers": return z.object({ map: z.record(z.string(), z.string()), tuple: z.tuple([z.string(), z.string()]) });
     case "tree": {
@@ -37,6 +38,7 @@ export const referenceSchema = (node: SchemaDsl): z.ZodType => {
     case "literal": return z.literal(node.value);
     case "enum": return z.enum(node.value);
     case "object": return z.object(Object.fromEntries(Object.entries(node.value).map(([key, value]) => [key, referenceSchema(value)])));
+    case "strictObject": return z.strictObject(Object.fromEntries(Object.entries(node.value).map(([key, value]) => [key, referenceSchema(value)])));
     case "array": return z.array(referenceSchema(node.value));
     case "record": return z.record(z.string(), referenceSchema(node.value));
     case "tuple": {

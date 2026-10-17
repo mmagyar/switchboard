@@ -8,7 +8,7 @@ export type SchemaDsl =
   | UnitSchema
   | { type: "literal"; value: Json }
   | { type: "enum"; value: string[] }
-  | { type: "object"; value: Record<string, SchemaDsl> }
+  | { type: "object" | "strictObject"; value: Record<string, SchemaDsl> }
   | { type: "array" | "optional" | "nullable" | "readonly"; value: SchemaDsl }
   | { type: "union"; value: SchemaDsl[] }
   | { type: "default" | "catch"; value: [SchemaDsl, Json] };
@@ -18,7 +18,7 @@ export const schemaDslSchema: z.ZodType<SchemaDsl> = z.lazy(() =>
     z.strictObject({ type: z.enum(["unknown", "string", "number", "boolean", "file"]) }),
     z.strictObject({ type: z.literal("literal"), value: jsonSchema }),
     z.strictObject({ type: z.literal("enum"), value: z.array(z.string()).min(1) }),
-    z.strictObject({ type: z.literal("object"), value: z.record(z.string(), schemaDslSchema) }),
+    z.strictObject({ type: z.enum(["object", "strictObject"]), value: z.record(z.string(), schemaDslSchema) }),
     z.strictObject({ type: z.enum(["array", "optional", "nullable", "readonly"]), value: schemaDslSchema }),
     z.strictObject({ type: z.literal("union"), value: z.array(schemaDslSchema).min(2) }),
     z.strictObject({ type: z.enum(["default", "catch"]), value: z.tuple([schemaDslSchema, jsonSchema]) }),

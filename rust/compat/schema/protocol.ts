@@ -2,13 +2,13 @@ import { z } from "zod";
 
 export const jsonSchema = z.json();
 export type Json = z.infer<typeof jsonSchema>;
-export const derivedNameSchema = z.enum(["map", "tuple", "open", "tree", "mutual", "containers"]);
+export const derivedNameSchema = z.enum(["map", "tuple", "open", "tree", "mutual", "containers", "strict"]);
 export type DerivedName = z.infer<typeof derivedNameSchema>;
 export type SchemaDsl =
   | { type: "unknown" | "string" | "number" | "boolean" | "file" }
   | { type: "literal"; value: string | number | boolean | null }
   | { type: "enum"; value: string[] }
-  | { type: "object"; value: Record<string, SchemaDsl> }
+  | { type: "object" | "strictObject"; value: Record<string, SchemaDsl> }
   | { type: "array" | "record" | "optional" | "nullable" | "readonly"; value: SchemaDsl }
   | { type: "union" | "tuple"; value: SchemaDsl[] }
   | { type: "default" | "catch"; value: [SchemaDsl, Json] }
@@ -18,7 +18,7 @@ export const schemaDslSchema: z.ZodType<SchemaDsl> = z.lazy(() => z.discriminate
   z.strictObject({ type: z.enum(["unknown", "string", "number", "boolean", "file"]) }),
   z.strictObject({ type: z.literal("literal"), value: z.union([z.string(), z.number(), z.boolean(), z.null()]) }),
   z.strictObject({ type: z.literal("enum"), value: z.array(z.string()).min(1) }),
-  z.strictObject({ type: z.literal("object"), value: z.record(z.string(), schemaDslSchema) }),
+  z.strictObject({ type: z.enum(["object", "strictObject"]), value: z.record(z.string(), schemaDslSchema) }),
   z.strictObject({ type: z.enum(["array", "record", "optional", "nullable", "readonly"]), value: schemaDslSchema }),
   z.strictObject({ type: z.literal("union"), value: z.array(schemaDslSchema).min(2) }),
   z.strictObject({ type: z.literal("tuple"), value: z.array(schemaDslSchema) }),

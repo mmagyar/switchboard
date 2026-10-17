@@ -2,18 +2,37 @@
 
 The Rust implementation runs natively without Bun, Node or an embedded JavaScript runtime. The measured server uses substantially less resident memory and starts sooner on this host. Throughput gains depend on concurrency and workload. The linked Rust/WASM browser application is larger than the equivalent original-client JavaScript bundle.
 
-The Bun/TypeScript reference remains unchanged. These results establish bounded compatibility evidence; the strict HTTP corpus retains one unresolved Bun Request-constructor difference.
+The Bun/TypeScript reference remains unchanged. Acceptance remains blocked. The latest question batch timed out; its automatic selections granted no policy approval.
+
+## Current remediation status
+
+The integrated remediation passed all-features check, Clippy with warnings denied, formatting, 179 library tests, four loadgen tests and two schema-runner tests. Bun passed 283 tests with 775 assertions in 6.34 seconds. The serialized feature/compiler/browser matrix completed in 43.13 seconds with no failures. It exercised the linked release application and all 19 public browser decoder probes.
+
+| Acceptance evidence | Current result |
+| --- | --- |
+| Schema/parameter corpus | 3,741 cases, zero mismatches: unchanged 3,103-case seed plus 638 extensions |
+| Explicit safety boundaries | 12 assertions passed |
+| Strict HTTP corpus | 103 cases, two mismatches: BREW and string-backed BOM constructor behavior |
+| Portable HTTP corpus | 102 cases, one BOM mismatch; only BREW is excluded explicitly |
+| Unfiltered radix audit | 124 mismatches in 768 integrated-parser cases |
+| Separate exact-radix checkpoint | 75 mismatches in 768 cases; commit `66cc24f` remains unintegrated |
+| Generated Unicode lengths | Existing UTF-16 expectation remains unchanged pending explicit approval |
+| Independent remediation review | Pending a resolved, green acceptance check |
+
+Bun 1.4 rejects BOM-prefixed JSON in an in-memory string-backed Request, but accepts the same byte-backed Request and both string/byte bodies over actual HTTP. Rust's byte decoding accepts it. The constructor mismatch remains in the corpus, with complete expected/actual output; no new exclusion or normalization was added. The expanded corpus exposed this distinction after the component BOM correction.
+
+All four policy decisions remain asked: BREW handling, generated Unicode lengths, large-radix conversion and the BOM constructor difference. The radix mismatches are within the finite input domain, not approved resource-bound exceptions. The currently configured CI portable gate remains red on BOM; hosted Actions has not run. Server performance tables below describe the pre-remediation build and require refresh before claims about the current binary.
 
 ## Feature evidence
 
 | Surface | Verified behavior |
 | --- | --- |
 | Routing | Seven methods, numeric/string and optional params, static-first backtracking, aliases/prefixes, custom defaults, duplicate/conflicting paths and bodyless HEAD |
-| Validation and URLs | Objects, arrays, records, heterogeneous tuples, open objects, unions/wrappers/defaults/catches, recursive generated schemas, checked coercion, encoding and complete issue messages |
+| Validation and URLs | Stripping/strict objects, arrays, records, heterogeneous tuples, open objects, sticky work exhaustion, unions/wrappers/defaults/catches, recursive generated schemas, checked coercion, numeric-key ordering and complete issues |
 | Typed contracts | serde/schemars shared types, `route!`, compile-fail fixtures, actual handler binding and renamed dependency compilation |
 | Authorization/errors | Authorization before parsing, 401/403 distinction, request/not-found/internal errors, negotiation, custom parsers/HTML formatters and error logging |
 | Output/streaming | Validated JSON, stripping, warning-and-retain invalid output, nested deferred values, real streaming bodies, custom status/headers/redirects and owned background cleanup |
-| Multipart | Runtime File identity plus retained names, MIME declarations and bytes through request context; buffered collection requires application/deployment size limits |
+| Multipart | File identity and retained metadata/bytes through success and error context; lazy 128 MiB default server cap maps parser limit errors to 413; application file/concurrency policy remains necessary |
 | HTTP hosting | Live endpoints, access logs, text/binary transport MIME inference, failed-start cleanup, pending-request cancellation, socket shutdown and listener reuse |
 | TLS/WebSockets | Trusted self-signed TLS/WSS, provided PEMs, arbitrary upgrade paths, multiline log delivery, exact RELOAD broadcasts and owned shutdown |
 | Logging | Owned file logger, argument encoding, file tailing, notifications, safe callback-triggered closure and explicit cleanup |
@@ -21,15 +40,15 @@ The Bun/TypeScript reference remains unchanged. These results establish bounded 
 | Maud | Optional escaped server templates, real HTML endpoint and escaping mutation proof; no required browser runtime or hydration |
 | Rust browser | Shared typed route calls, actual fetch validation, unchecked JSON, exact original-client fetch/validation messages, counter/listener disposal, socket close and RELOAD navigation |
 
-The component gates passed with Rust 1.99.1 and Bun 1.4.0:
+The integrated component gates passed with Rust 1.99.1 and Bun 1.4.0:
 
-- Core all-features tests: 136 library tests, four loadgen tests and two schema-runner tests passed.
+- Core all-features tests: 179 library tests, four loadgen tests and two schema-runner tests passed.
 - Macro suite: eight unit tests plus one trybuild group containing four compile/compile-fail fixtures passed.
 - Browser suite: 15 native tests passed. Core and browser WASM checks passed, and the linked release application ran in Chromium 148.0.7778.96.
-- Original and tooling Bun suite: 283 passed, zero failed, 759 assertions, 6.20 seconds.
+- Original and tooling Bun suite: 283 passed, zero failed, 775 assertions, 6.34 seconds.
 - TypeScript checks passed for the original source, HTTP compatibility, schema compatibility, benchmark and browser tooling.
 - Rust format, all-target Clippy, no-default/client-only/server-only checks and renamed-consumer checks passed.
-- Rust 1.85.1 checked all core features/targets and the browser's native and WASM builds successfully.
+- Rust 1.85.1 checked all core features/targets, the browser WASM crate and the public decoder WASM consumer successfully.
 
 The browser journey checked real responses and visible output, exact error text against the original client, log frames, navigation type `reload`, closed sockets and a counter that remains unchanged after disposal. Desktop (1100px) and mobile (360px) screenshots were inspected; text and controls remain legible without horizontal overflow. Browser CORS, cross-origin cookies, HTTPS/WSS and non-Chromium behavior remain outside this particular browser journey. Separate native tests exercise TLS/WSS.
 
@@ -37,25 +56,25 @@ Focused mutation proofs cover routing, escaping, coercion, authorization, creden
 
 ## Strict comparisons and explicit boundaries
 
-The schema/parameter gate passed **3,667 cases**, comprising the preserved 3,103-case seed and 564 extensions. The independent boundary audit passed **12 cases**. Complete issues, messages, URLs, missing values and array order remain observable.
+The schema/parameter gate passed **3,741 cases**, comprising the preserved 3,103-case seed and 638 extensions. These include strict and generated deny-unknown objects, nested strict issues and tuple-union continuation. The independent boundary audit passed **12 cases**. Complete issues, messages, URLs, missing values and array order remain observable.
 
 The HTTP/definition/URL checker produced:
 
 ```json
-{"cases":94,"mismatches":1}
+{"cases":103,"mismatches":2}
 ```
 
-The sole mismatching case is `method-unsupported`: Bun 1.4 converts a constructed custom `BREW` Request to GET, while Rust preserves BREW and the router returns 405. Default strict checking exits 1. The opt-in portable gate produced:
+`method-unsupported` retains Bun's BREW-to-GET constructor behavior versus Rust's 405. `request-leading-bom` retains the string-backed constructor distinction described above. Both strict and portable commands exit 1. The opt-in portable result is:
 
 ```json
-{"cases":93,"mismatches":0,"excludedRuntimeCases":["method-unsupported"]}
+{"cases":102,"mismatches":1,"excludedRuntimeCases":["method-unsupported"]}
 ```
 
-The exclusion is explicit and does not normalize errors or alter strict defaults. Its compatibility policy remains unresolved. The normal supported-method corpus is green; universal parity remains unproven.
+The exclusion remains limited to BREW; BOM and radix evidence are not normalized away. The separate unfiltered radix audit remains red. Universal parity and final acceptance remain unproven.
 
 [README.md](README.md#compatibility-evidence-and-limits) documents the approved finite-JSON, Unicode, query-expansion and validation-work boundaries. Generated unsupported schema constraints fail explicitly. Native logging is explicit rather than a global console patch. Native code reload requires rebuilding/restarting; the browser reload signal is supported. Native clients have no browser CORS/SameSite context.
 
-## Measurement protocol
+## Historical pre-remediation measurement protocol
 
 Measurements ran on 2026-10-16, Linux 6.8.0-146-generic x86_64, AMD EPYC-Rome Processor, four visible logical CPUs with allowed CPU list 0-3. Rust was 1.99.1, Cargo 1.99.1, LLVM 23.1.1 and Bun 1.4.0. CPU quota fields were unavailable; that does not establish an unlimited or dedicated host. No CPU affinity isolation was applied.
 
@@ -111,13 +130,13 @@ The actual release Rust application links the shared typed contracts, schema val
 
 | Artifact | Raw bytes | Gzip bytes |
 | --- | ---: | ---: |
-| Linked WASM | 567176 | 165411 |
-| Generated wasm-bindgen JS | 24669 | 5514 |
-| Bootstrap | 165 | 148 |
-| Rust total | **592010** | **171073** |
-| Comparable minified original-client JS | **291059** | **66509** |
+| Linked WASM | 598367 | 172875 |
+| Generated wasm-bindgen JS | 26440 | 5798 |
+| Bootstrap | 268 | 188 |
+| Rust total | **625075** | **178861** |
+| Comparable minified original-client JS | **291595** | **66684** |
 
-Rust is about **2.57x** the gzip download in this representative application. Optional server-rendered Maud pages require **zero framework browser bytes** when they use no browser behavior. WASM compilation/startup and browser memory were not benchmarked, so byte counts establish no browser latency or CPU advantage.
+These are refreshed post-remediation artifacts. Startup API failure/recovery and back/forward interactions passed. Explicit persisted events exercised the reload branch; Chromium policy prevented a real cached-document restoration. Current desktop/mobile success and failure screenshots were inspected. Rust is about **2.68x** the gzip download in this representative application. Optional server-rendered Maud pages require **zero framework browser bytes** when they use no browser behavior. WASM compilation/startup and browser memory were not benchmarked, so byte counts establish no browser latency or CPU advantage.
 
 ## Reproduction and retained evidence
 
@@ -140,4 +159,6 @@ The local `.tmp/` artifacts remain untracked:
 
 ## Independent review
 
-The integrated correctness, security, concurrency/performance and browser/UI review is pending. Delivery remains subject to that review and disposition of its findings.
+Six independent reviews of `57b9e4f` completed and found actionable defects. Their reproduced schema, ownership, transport, hosting, client and browser findings drove the integrated remediation. Fresh independent re-review remains pending a resolved, green acceptance check. Policy-dependent findings and current radix/BOM mismatches remain visible; component completion grants no final review approval.
+
+Current evidence is under `.tmp/final-reviews/`: `remediation-tools-{rust,bun,types}.log`, `integrated-matrix.{log,status}`, `matrix-*.log`, `integrated-{http-strict,http-portable,schema,bounds}.log`, `integrated-schema/`, `radix-integrated-{audit.log,results.ndjson,mismatches.ndjson}`, `bom-source-policy.{ts,log}` and `integrated-runner-hashes.txt`. Cargo validation was serialized with the shared external lock, local crates were forced to recompile, and binaries/WASM were preserved before external gates. An earlier apparent green run that omitted new tests was rejected as invalid shared-target evidence.

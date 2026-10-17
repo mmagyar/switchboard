@@ -1442,41 +1442,53 @@ mod tests {
     }
 
     #[test]
-    fn hard_exhaustion_stops_collections_and_union_attempts() {
+    fn validation_exhaustion_preserves_first_failure_for_each_collection() {
         let count = 8_192;
-        let array = Input::Array(vec![Input::Scalar(json!(0)); count]);
+        let array = Value::Array(vec![json!(0); count]);
         let fields = (0..count)
             .map(|index| (index.to_string(), Schema::Number))
             .collect::<IndexMap<_, _>>();
-        let object = Input::Object(
-            fields
-                .keys()
-                .map(|key| (key.clone(), Input::Scalar(json!(0))))
-                .collect(),
-        );
-        for (schema, input) in [
-            (Schema::Array(Box::new(Schema::Number)), &array),
-            (Schema::Tuple(vec![Schema::Number; count]), &array),
-            (Schema::Object(fields.clone()), &object),
+        let object = Value::Object(fields.keys().map(|key| (key.clone(), json!(0))).collect());
+        for (schema, input, path) in [
+            (Schema::Array(Box::new(Schema::Number)), &array, json!([1])),
+            (
+                Schema::Tuple(vec![Schema::Number; count]),
+                &array,
+                json!([1]),
+            ),
+            (Schema::Object(fields.clone()), &object, json!(["1"])),
             (
                 Schema::OpenObject(IndexMap::new(), Box::new(Schema::Number)),
                 &object,
+                json!(["1"]),
             ),
-            (Schema::Record(Box::new(Schema::Number)), &object),
-            (Schema::Union(vec![Schema::String; count]), &array),
+            (
+                Schema::Record(Box::new(Schema::Number)),
+                &object,
+                json!(["1"]),
+            ),
+            (
+                Schema::Union(vec![Schema::String; count]),
+                &array,
+                json!([]),
+            ),
         ] {
-            let budget = ValidationBudget {
-                limits: ValidationLimits {
-                    max_depth: 128,
-                    max_nodes: 2,
-                },
-                remaining: Cell::new(2),
-                failure: RefCell::new(None),
-            };
-            let error = schema.parse_at(input, &[], 0, &budget).err().unwrap();
-            let expected = budget.failure.into_inner().unwrap();
-            assert_eq!(error.issues.len(), 1, "{schema:?}");
-            assert_eq!(error.issues, expected.issues);
+            let error = schema
+                .parse_value_with_limits(
+                    input.clone(),
+                    ValidationLimits {
+                        max_depth: 128,
+                        max_nodes: 2,
+                    },
+                )
+                .unwrap_err();
+            assert_eq!(
+                error.issues,
+                vec![json!({
+                    "code":"custom", "path":path, "message":"Schema validation exceeds 2 nodes"
+                })],
+                "{schema:?}"
+            );
         }
     }
 

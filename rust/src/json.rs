@@ -169,26 +169,11 @@ mod tests {
     }
 
     #[test]
-    fn ordered_entries_obey_array_index_boundaries_and_stable_string_order() {
+    fn stringify_obeys_array_index_boundaries_and_stable_string_order() {
         let value: Value = serde_json::from_str(r#"{"z":0,"4294967295":1,"10":2,"2":3,"01":4,"0":5,"4294967294":6,"-0":7,"1.0":8,"a":9}"#).unwrap();
-        let keys = ordered_entries(value.as_object().unwrap())
-            .into_iter()
-            .map(|(key, _)| key.as_str())
-            .collect::<Vec<_>>();
         assert_eq!(
-            keys,
-            vec![
-                "0",
-                "2",
-                "10",
-                "4294967294",
-                "z",
-                "4294967295",
-                "01",
-                "-0",
-                "1.0",
-                "a"
-            ]
+            stringify(&value).unwrap(),
+            r#"{"0":5,"2":3,"10":2,"4294967294":6,"z":0,"4294967295":1,"01":4,"-0":7,"1.0":8,"a":9}"#
         );
     }
 

@@ -736,8 +736,10 @@ where
         while let Schema::Refinement(inner, _) = schema {
             schema = inner;
         }
-        if let (Schema::Object(shape) | Schema::OpenObject(shape, _), Some(fields)) =
-            (schema, value.fields())
+        if let (
+            Schema::Object(shape) | Schema::StrictObject(shape) | Schema::OpenObject(shape, _),
+            Some(fields),
+        ) = (schema, value.fields())
         {
             for (key, field) in fields {
                 let Some(schema) = shape.get(&key).cloned() else {
@@ -1056,7 +1058,7 @@ async fn parse_body(
     let value = if text.trim().is_empty() {
         None
     } else {
-        match serde_json::from_str(&text) {
+        match crate::json::parse(&text) {
             Ok(value) => Some(value),
             Err(_) => return Ok(ParsedBody::RawError(400, "Body is not valid JSON".into())),
         }
@@ -2046,11 +2048,7 @@ mod tests {
         // The handler closure also owns the shared future. Release routes before cleanup.
         drop(router);
         if mode.starts_with("cancelled drain") {
-            assert!(
-                tokio::time::timeout(Duration::from_millis(1), definer.drain_background())
-                    .await
-                    .is_err()
-            );
+            assert!(definer.drain_background().now_or_never().is_none());
         }
         if mode == "cancelled cleanup" {
             assert!(definer.cleanup_background().now_or_never().is_none());
@@ -2352,6 +2350,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_json_rounds_before_validation_and_handler_decisions() {
+        let body_schema = Schema::Number.refine(|value| {
+            if value.and_then(Value::as_u64) == Some(9_007_199_254_740_992) {
+                Ok(())
+            } else {
+                Err(ValidationError::custom("request number was not rounded"))
+            }
+        });
+        let registered = definer().bind(
+            route(Method::Post, Some(body_schema), Schema::Boolean),
+            |_, body, _, _| async move {
+                Ok(DeferredValue::ready(
+                    body.and_then(|value| value.as_u64()) == Some(9_007_199_254_740_992),
+                ))
+            },
+        );
+        let response = router(registered)
+            .handle_request(request(
+                Method::Post,
+                "/items/1",
+                Some("application/json"),
+                "9007199254740993",
+            ))
+            .await;
+        assert_eq!(response.status(), 201);
+        assert_eq!(text(response).await, "true");
+    }
+
+    #[tokio::test]
     async fn request_json_decoding_strips_one_utf8_bom() {
         let registered = definer().bind(
             route(
@@ -2425,6 +2452,16 @@ mod tests {
             object([("ready", Schema::String), ("deferred", Schema::String)]).refine(|_| Ok(())),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn formatted_strict_object_fields_warn_without_blocking() {
+        let Schema::Object(shape) =
+            object([("ready", Schema::String), ("deferred", Schema::String)])
+        else {
+            unreachable!()
+        };
+        assert_formatted_shape_warnings(Schema::StrictObject(shape)).await;
     }
 
     async fn assert_formatted_shape_warnings(schema: Schema) {
@@ -2564,6 +2601,84 @@ mod tests {
             .await;
         assert_eq!(response.status(), 422);
         assert_eq!(text(response).await, "a.bin,b.txt");
+    }
+
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn live_body_limits_reach_bound_handlers_as_413_for_every_media_parser() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let registered = definer().bind(
+            route(Method::Post, None, Schema::Unknown),
+            |_, _, _, _| async { panic!("oversized request must not reach the handler") },
+        );
+        let config = crate::server::ServerConfig {
+            hostname: "127.0.0.1".into(),
+            port: Some(0),
+            redirect: None,
+            max_request_body_size: 32,
+            ..crate::server::ServerConfig::default()
+        };
+        let mut server = crate::server::serve(
+            config,
+            Arc::new(router(registered)),
+            crate::server::ServerOptions::default(),
+        )
+        .await
+        .unwrap();
+        for (content_type, body) in [
+            (
+                "application/json",
+                format!("{{\"name\":\"{}\"}}", "x".repeat(64)),
+            ),
+            (
+                "application/x-www-form-urlencoded",
+                format!("name={}", "x".repeat(64)),
+            ),
+            (
+                "multipart/form-data; boundary=limit",
+                format!(
+                    "--limit\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n{}\r\n--limit--\r\n",
+                    "x".repeat(64)
+                ),
+            ),
+        ] {
+            for chunked in [false, true] {
+                let (framing, payload) = if chunked {
+                    let (first, second) = body.split_at(16);
+                    (
+                        "Transfer-Encoding: chunked".to_owned(),
+                        format!(
+                            "{:x}\r\n{first}\r\n{:x}\r\n{second}\r\n0\r\n\r\n",
+                            first.len(),
+                            second.len()
+                        ),
+                    )
+                } else {
+                    (format!("Content-Length: {}", body.len()), body.clone())
+                };
+                let wire = format!(
+                    "POST /items/1 HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nAccept: text/plain\r\nContent-Type: {content_type}\r\n{framing}\r\n\r\n{payload}"
+                );
+                let mut connection = tokio::net::TcpStream::connect(server.local_addr())
+                    .await
+                    .unwrap();
+                connection.write_all(wire.as_bytes()).await.unwrap();
+                let mut bytes = Vec::new();
+                tokio::time::timeout(Duration::from_secs(3), connection.read_to_end(&mut bytes))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let reply = String::from_utf8(bytes).unwrap();
+                assert_eq!(
+                    reply.lines().next(),
+                    Some("HTTP/1.1 413 Payload Too Large"),
+                    "{content_type}, chunked={chunked}: {reply}"
+                );
+                assert_eq!(reply.split_once("\r\n\r\n").unwrap().1, "Payload Too Large");
+            }
+        }
+        server.stop().await.unwrap();
     }
 
     async fn assert_body_limit_response(content_type: &str, chunks: Vec<Bytes>, limit: usize) {

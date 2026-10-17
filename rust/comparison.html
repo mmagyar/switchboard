@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Compare real Switchboard declarations in TypeScript and Rust, using cocktail routes, ingredient forms, server HTML and optional browser clients.">
+  <title>Switchboard | TypeScript and Rust declaration guide</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: light;
+      --white: #fff; --navy: #132d41; --blue: #155fa6; --clay: #9c3f25;
+      --green: #176552; --slate: #536477; --line: #d4dee8;
+      --mist: #f5f7fb; --ice: #eaf3fd; --peach: #fff1e9; --mint: #e5f3eb;
+      --ink: var(--navy); --muted: var(--slate); --surface: var(--white);
+      --code-bg: var(--mist); --border: var(--line); --focus: var(--blue);
+      --link: var(--blue); --link-hover: var(--navy);
+      --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem;
+      --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem;
+      --space-12: 3rem; --space-16: 4rem; --space-20: 5rem;
+      --size-xs: .8rem; --size-sm: .9rem; --size-body: 1rem; --size-lead: 1.15rem;
+      --size-h2: 1.8rem; --size-display: clamp(2.6rem, 4.8vw, 4.5rem);
+      --weight-normal: 400; --weight-medium: 600; --weight-bold: 800;
+      --radius-sm: .25rem; --radius-md: .5rem;
+      --body-font: system-ui, -apple-system, "Segoe UI", sans-serif;
+      --display-font: "Arial Black", "DejaVu Sans", sans-serif;
+      --mono-font: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      --page-width: 83rem; --reading-width: 70ch; --sidebar-width: 10rem;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--surface); color: var(--ink); font: var(--size-body)/1.65 var(--body-font); }
+    a { color: var(--link); text-underline-offset: var(--space-1); }
+    a:hover { color: var(--link-hover); }
+    :focus-visible { outline: 3px solid var(--focus); outline-offset: var(--space-1); }
+    .wrap { width: min(var(--page-width), calc(100% - var(--space-8))); margin-inline: auto; }
+    .skip { position: absolute; left: var(--space-4); top: var(--space-4); transform: translateY(-200%); background: var(--surface); padding: var(--space-3); z-index: 2; }
+    .skip:focus { transform: none; }
+    .masthead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-4); padding-block: var(--space-5); border-bottom: 1px solid var(--border); }
+    .brand { font-weight: var(--weight-bold); font-size: var(--size-lead); letter-spacing: -.04em; text-decoration: none; color: var(--ink); }
+    .brand span { color: var(--muted); font-size: var(--size-sm); font-weight: var(--weight-normal); letter-spacing: normal; margin-left: var(--space-2); }
+    .badge { color: var(--green); background: var(--mint); padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); font-size: var(--size-xs); font-weight: var(--weight-medium); }
+    .hero { padding-block: var(--space-12); display: grid; align-items: center; gap: var(--space-8); }
+    .eyebrow { font: var(--weight-medium) var(--size-xs)/1.5 var(--mono-font); color: var(--muted); margin: 0 0 var(--space-4); }
+    h1 { font: var(--weight-bold) var(--size-display)/1.08 var(--display-font); letter-spacing: -.055em; margin: 0 0 var(--space-6); }
+    h1 span { display: block; color: var(--blue); }
+    .lead { max-width: 48ch; font-size: var(--size-lead); margin-bottom: var(--space-6); }
+    .primary { display: inline-flex; min-height: 44px; align-items: center; gap: var(--space-6); padding: var(--space-3) var(--space-5); background: var(--blue); color: var(--white); border-radius: var(--radius-sm); text-decoration: none; font-weight: var(--weight-medium); }
+    .primary:hover { background: var(--navy); color: var(--white); }
+    .ticket { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+    .ticket-request { padding: var(--space-6); background: var(--navy); color: var(--white); }
+    .ticket-request p { margin: 0 0 var(--space-3); font: var(--size-xs) var(--mono-font); }
+    .ticket-request code { display: block; font-size: var(--size-lead); background: transparent; color: inherit; padding: 0; overflow-wrap: anywhere; }
+    .ticket-body { padding: var(--space-6); }
+    .ticket-body p { margin: 0 0 var(--space-4); }
+    .ticket-lanes { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); padding-bottom: var(--space-5); border-bottom: 1px dashed var(--border); }
+    .ticket-lanes strong { display: block; }
+    .ticket-lanes small { color: var(--muted); }
+    .ts-label { color: var(--blue); } .rust-label { color: var(--clay); }
+    .ticket-result { margin: var(--space-5) 0 0; font: var(--size-sm)/1.8 var(--mono-font); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .context { max-width: var(--reading-width); margin: 0 0 var(--space-8); color: var(--muted); }
+    .guide-layout { border-top: 1px solid var(--border); padding-top: var(--space-8); }
+    .chapters { margin-bottom: var(--space-8); }
+    .chapters p { font-weight: var(--weight-medium); margin: 0 0 var(--space-2); }
+    .chapters ul { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); padding: 0; margin: 0; list-style: none; }
+    .chapters a { display: inline-flex; align-items: center; min-height: 32px; font-size: var(--size-sm); text-decoration: none; }
+    .content, .pair, .pane { min-width: 0; }
+    section { scroll-margin-top: var(--space-6); margin-bottom: var(--space-16); }
+    h2 { font-size: var(--size-h2); line-height: 1.25; letter-spacing: -.035em; margin: 0 0 var(--space-4); }
+    h3 { font-size: var(--size-body); line-height: 1.5; margin: 0; }
+    section > p { max-width: var(--reading-width); }
+    .pair { display: grid; gap: var(--space-4); margin-block: var(--space-6); align-items: start; }
+    .pane { border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
+    .pane h3 { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); }
+    .pane.ts h3 { background: var(--ice); color: var(--blue); }
+    .pane.rust h3 { background: var(--peach); color: var(--clay); }
+    pre { margin: 0; padding: var(--space-4); overflow: auto; font: .85rem/1.7 var(--mono-font); tab-size: 2; background: var(--code-bg); }
+    pre:focus-visible { outline-offset: -3px; }
+    code { font-family: var(--mono-font); }
+    p code, li code, dd code { font-size: .9em; background: var(--code-bg); padding: 0 var(--space-1); border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+    .caption { font-size: var(--size-sm); padding: var(--space-3) var(--space-4); margin: 0; color: var(--muted); border-top: 1px solid var(--border); }
+    .note { padding: var(--space-4) var(--space-5); background: var(--mist); border-left: 3px solid var(--blue); border-radius: var(--radius-sm); }
+    .note p { margin: 0; }
+    .change { font-size: var(--size-sm); color: var(--muted); }
+    .change strong { color: var(--ink); }
+    .facts { display: grid; gap: var(--space-5); padding: 0; margin: var(--space-6) 0; }
+    .facts dt { font-weight: var(--weight-medium); }
+    .facts dd { margin: var(--space-1) 0 0; color: var(--muted); }
+    details { border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--space-4); }
+    summary { cursor: pointer; min-height: 32px; font-weight: var(--weight-medium); }
+    details .pair { margin-bottom: 0; }
+    .status { padding: var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-md); }
+    .status h2 { font-size: var(--size-lead); }
+    .status p:last-child { margin-bottom: 0; }
+    footer { border-top: 1px solid var(--border); padding-block: var(--space-8); font-size: var(--size-sm); color: var(--muted); }
+    footer p { max-width: var(--reading-width); }
+    footer ul { display: flex; flex-wrap: wrap; list-style: none; padding: 0; gap: var(--space-3) var(--space-6); }
+    footer a { display: inline-flex; align-items: center; min-height: 32px; }
+    @media (min-width: 48rem) {
+      .wrap { width: min(var(--page-width), calc(100% - var(--space-16))); }
+      .facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (min-width: 56rem) {
+      .hero { grid-template-columns: 1.25fr 1fr; gap: var(--space-12); padding-block: var(--space-16); }
+      .pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (min-width: 70rem) {
+      .guide-layout { display: grid; grid-template-columns: var(--sidebar-width) minmax(0, 1fr); gap: var(--space-8); }
+      .chapters { position: sticky; top: var(--space-6); align-self: start; }
+      .chapters ul { display: block; }
+    }
+    @media print {
+      .chapters, .primary, .skip { display: none; }
+      .wrap { width: 100%; }
+      .guide-layout { display: block; }
+      .hero { padding-block: var(--space-6); }
+      .pair { display: block; }
+      .pane { margin-block: var(--space-4); break-inside: avoid; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+      section { margin-bottom: var(--space-8); }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#declarations">Skip to declarations</a>
+  <header class="masthead wrap">
+    <a class="brand" href="#top">switchboard <span>implementation field guide</span></a>
+    <span class="badge">This guide runs with zero JavaScript</span>
+  </header>
+  <main id="top" class="wrap">
+    <div class="hero">
+      <div>
+        <p class="eyebrow">TYPESCRIPT ↔ RUST / WHAT'S IN MY BAR?</p>
+        <h1>Same cocktail.<span>Different declarations.</span></h1>
+        <p class="lead">Follow one cocktail app from a typed route to a rendered page. Compare the actual Switchboard APIs, one declaration at a time.</p>
+        <a class="primary" href="#declarations">Compare the declarations <span aria-hidden="true">↓</span></a>
+      </div>
+      <div class="ticket" aria-label="Illustrative shared request and response">
+        <div class="ticket-request">
+          <p>ONE ILLUSTRATIVE REQUEST</p>
+          <code>GET /cocktails/daiquiri</code>
+        </div>
+        <div class="ticket-body">
+          <p>The wire contract stays familiar.</p>
+          <div class="ticket-lanes">
+            <div><strong class="ts-label">TypeScript</strong><small>Zod → inferred type</small></div>
+            <div><strong class="rust-label">Rust</strong><small>Struct → generated schema</small></div>
+          </div>
+          <pre class="ticket-result" aria-label="Illustrative JSON response">{ "slug": "daiquiri",
+  "name": "Daiquiri" }</pre>
+        </div>
+      </div>
+    </div>
+    <p class="context">These fragments adapt the nearby <strong>What's in my bar?</strong> app's slug routes, ingredient selection and server HTML. The model is deliberately reduced to two fields. Data lookup and matching stay app-owned. The reference app is unchanged, and <a href="#status">Rust acceptance is still pending</a>.</p>
+    <div class="guide-layout" id="declarations" tabindex="-1">
+      <nav class="chapters" aria-label="Guide chapters">
+        <p>Compare by concern</p>
+        <ul>
+          <li><a href="#contracts">Contracts</a></li>
+          <li><a href="#routes">Routes &amp; params</a></li>
+          <li><a href="#authorization">Authorization</a></li>
+          <li><a href="#handlers">Handlers &amp; errors</a></li>
+          <li><a href="#forms">Forms</a></li>
+          <li><a href="#rendering">Server HTML</a></li>
+          <li><a href="#clients">Typed clients</a></li>
+          <li><a href="#streaming">Streaming</a></li>
+          <li><a href="#hosting">Hosting</a></li>
+          <li><a href="#browser">Browser behavior</a></li>
+        </ul>
+      </nav>
+      <div class="content">
+        <section id="contracts" aria-labelledby="contracts-heading">
+          <h2 id="contracts-heading">Declare the contract once</h2>
+          <p>TypeScript starts with a runtime Zod schema and infers the type. Rust starts with serde/schemars structs and generates runtime schemas when a typed route is constructed.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · schema first</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript contract declarations"><code>import { z } from "zod";
+import {
+  define, RouteHandlerDefiner,
+  Router, NotFoundError,
+} from "switchboard/server";
+
+const cocktailSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+});
+type Cocktail = z.infer&lt;typeof cocktailSchema&gt;;
+
+const def = define&lt;"public"&gt;();</code></pre>
+              <p class="caption">Use this setup for the TypeScript fragments below.</p>
+            </div>
+            <div class="pane rust"><h3>Rust · type first</h3>
+<pre tabindex="0" role="region" aria-label="Rust contract declarations"><code>use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
+use switchboard::{
+    Authorization, DefinitionError,
+    HandlerDefiner, HttpError, Method,
+    Router, TypedRoute,
+};
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+struct Cocktail { slug: String, name: String }
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+struct DetailParams { slug: String }
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+struct NoParams {}</code></pre>
+              <p class="caption">Use these imports and models for the Rust fragments below.</p>
+            </div>
+          </div>
+          <p class="change"><strong>The declaration direction changes.</strong> Both still validate untrusted input at runtime. Rust's generated schema supports a defined subset of JSON Schema; unsupported constraints fail explicitly. Use a Rust refinement for application-specific validation.</p>
+        </section>
+
+        <section id="routes" aria-labelledby="routes-heading">
+          <h2 id="routes-heading">Give the route a reusable name</h2>
+          <p>Keep the JSON detail contract separate from HTML formatting. Reuse it in the server and client. The Rust factory creates a fresh definition because binding consumes its route.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · route builder</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript route declarations"><code>const detailDef = def.get(
+  "/cocktails/:slug",
+  "public",
+  cocktailSchema,
+  z.object({ slug: z.string() }),
+);</code></pre>
+            </div>
+            <div class="pane rust"><h3>Rust · typed route factory</h3>
+<pre tabindex="0" role="region" aria-label="Rust route declarations"><code>fn detail_route() -&gt; Result&lt;
+    TypedRoute&lt;DetailParams, (), Cocktail, &amp;'static str&gt;,
+    DefinitionError,
+&gt; {
+    TypedRoute::new(
+        Method::Get, "/cocktails/:slug",
+        "public", vec![],
+    )
+}</code></pre>
+            </div>
+          </div>
+          <dl class="facts">
+            <div><dt>Path and query share params</dt><dd>Add <code>q: z.string().optional()</code> or a Rust <code>q: Option&lt;String&gt;</code> to the params contract for <code>?q=lime</code>.</dd></div>
+            <div><dt>Shorthand is available</dt><dd>TypeScript can omit the params override. Rust can use <code>switchboard::route!(get, "/cocktails/:slug", "public", Cocktail)?</code> to infer a params type.</dd></div>
+            <div><dt>Prefixes stay server-only</dt><dd>Pass <code>["en", "de"]</code> as the final TypeScript builder argument, or <code>vec!["en".into(), "de".into()]</code> to Rust. Client URLs keep the canonical path.</dd></div>
+          </dl>
+          <p class="change">Optional path params use <code>:slug?</code> and follow required params. Names ending in <code>Id</code> infer numbers in both shorthand APIs; Rust also recognizes <code>_id</code>. Prefer strings for opaque identifiers.</p>
+        </section>
+
+        <section id="authorization" aria-labelledby="authorization-heading">
+          <h2 id="authorization-heading">Make public access an explicit decision</h2>
+          <p>The bar app currently grants public access. The permission label constrains declarations; your authorization callback decides whether a request is allowed.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · authorizer, then user resolver</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript public authorization"><code>const defineRoute = RouteHandlerDefiner(
+  async (_user, permission, _request) =&gt;
+    permission === "public" ? "ok" : "forbidden",
+  async (_request) =&gt; null,
+);</code></pre>
+            </div>
+            <div class="pane rust"><h3>Rust · user resolver, then authorizer</h3>
+<pre tabindex="0" role="region" aria-label="Rust public authorization"><code>fn public_definer()
+    -&gt; HandlerDefiner&lt;(), &amp;'static str&gt;
+{
+    HandlerDefiner::new(
+        |_| async { Ok(()) },
+        |(), permission, _| async move {
+            Ok(if permission == "public" {
+                Authorization::Ok
+            } else {
+                Authorization::Forbidden
+            })
+        },
+    )
+}</code></pre>
+            </div>
+          </div>
+          <div class="note"><p><strong>The constructor order reverses.</strong> Both resolve the user before authorizing, and authorize before parsing the body. For protected routes, replace these public-only callbacks with verified session resolution and permission checks. Unauthenticated maps to 401; forbidden maps to 403.</p></div>
+        </section>
+
+        <section id="handlers" aria-labelledby="handlers-heading">
+          <h2 id="handlers-heading">Bind the handler and return a typed value</h2>
+          <p>Without a formatter, Switchboard produces JSON. These small handlers use illustrative data so the library boundary is visible. Replace the local lookup with the app's storage adapter.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · async value or thrown HTTP error</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript JSON handler"><code>const detail = defineRoute(
+  detailDef,
+  async ({ slug }) =&gt; {
+    if (slug !== "daiquiri") {
+      throw new NotFoundError();
+    }
+    return { slug, name: "Daiquiri" };
+  },
+);
+
+const router = new Router();
+router.addRoute(detail);</code></pre>
+            </div>
+            <div class="pane rust"><h3>Rust · async Result</h3>
+<pre tabindex="0" role="region" aria-label="Rust JSON handler"><code>let define = public_definer();
+let detail = define.bind_typed(
+    detail_route()?,
+    |params, _body, (), _prefix| async move {
+        if params.slug != "daiquiri" {
+            return Err(HttpError::not_found());
+        }
+        Ok(Cocktail {
+            slug: params.slug,
+            name: "Daiquiri".into(),
+        })
+    },
+);
+
+let mut router = Router::new();
+router.add_route(detail)?;</code></pre>
+            </div>
+          </div>
+          <p class="change"><strong>Rust keeps one handler shape:</strong> <code>(params, Option&lt;body&gt;, user, prefix)</code>, including GET with <code>None</code>. TypeScript GET uses <code>(params, user, prefix)</code>; POST adds <code>body</code> after params. Both register method/path from the route object and reject duplicates.</p>
+          <p class="change">Use TypeScript <code>RequestError</code>/<code>Unauthorized</code> or Rust <code>HttpError::new</code>/<code>HttpError::unauthorized</code> for other HTTP failures. The Rust statements shown throughout belong inside functions returning a compatible <code>Result</code>, so <code>?</code> can propagate errors.</p>
+        </section>
+
+        <section id="forms" aria-labelledby="forms-heading">
+          <h2 id="forms-heading">Search with a normal HTML form</h2>
+          <p>The app accepts ingredient selections at <code>POST /cocktails</code>. This is a search, not cocktail creation. Unchecked groups are absent, one checked value is a string and repeated names become arrays.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · optional scalar-or-array fields</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript form declarations"><code>const oneOrMany = z.union([
+  z.string(), z.array(z.string()),
+]);
+const selectionSchema = z.object({
+  drink_ids: oneOrMany.nullish(),
+  additive_ids: oneOrMany.nullish(),
+});
+const searchDef = def.post(
+  "/cocktails", "public",
+  selectionSchema,
+  z.array(cocktailSchema),
+);
+
+const search = defineRoute(
+  searchDef,
+  async (_params, body) =&gt; findCocktails(body),
+);</code></pre>
+            </div>
+            <div class="pane rust"><h3>Rust · untagged enum, optional fields</h3>
+<pre tabindex="0" role="region" aria-label="Rust form declarations"><code>#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum OneOrMany {
+    One(String),
+    Many(Vec&lt;String&gt;),
+}
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+struct Selection {
+    drink_ids: Option&lt;OneOrMany&gt;,
+    additive_ids: Option&lt;OneOrMany&gt;,
+}
+
+let search_def = TypedRoute::&lt;
+    NoParams, Selection, Vec&lt;Cocktail&gt;, _,
+&gt;::new(Method::Post, "/cocktails", "public", vec![])?;
+
+let search = define.bind_typed(
+    search_def,
+    |_params, body, (), _prefix| async move {
+        let selection = body.ok_or_else(||
+            HttpError::new(400, "Missing selection"))?;
+        find_cocktails(selection).await
+    },
+);</code></pre>
+            </div>
+          </div>
+          <p class="change"><code>findCocktails</code> and <code>find_cocktails</code> are app-owned matching adapters, returning <code>Cocktail[]</code> and <code>Result&lt;Vec&lt;Cocktail&gt;, HttpError&gt;</code>. Normalize scalar/array values and validate IDs there. This adapted JSON body uses <code>.nullish()</code> to match Rust <code>Option</code>'s missing-or-null fields; native forms leave unchecked groups absent. The original app uses <code>.optional()</code>, which excludes explicit JSON null. Register the search handler with the same router used above.</p>
+          <div class="pane"><h3>Shared browser markup · no application script required</h3>
+<pre tabindex="0" role="region" aria-label="Native ingredient form markup"><code>&lt;form action="/cocktails" method="post"&gt;
+  &lt;label&gt;
+    &lt;input type="checkbox" name="drink_ids" value="white-rum"&gt;
+    White rum
+  &lt;/label&gt;
+  &lt;button type="submit"&gt;Find cocktails&lt;/button&gt;
+&lt;/form&gt;</code></pre>
+          </div>
+          <p class="change">The app's homepage actually uses GET; both GET and POST search routes exist. This POST variant uses the declared body contract. An HTML formatter must render the results for normal page navigation. POST defaults to <strong>201</strong> in both implementations, including search; set an explicit <strong>200</strong> in the formatter if that is your policy.</p>
+        </section>
+
+        <section id="rendering" aria-labelledby="rendering-heading">
+          <h2 id="rendering-heading">Render HTML on the server</h2>
+          <p>The bar app uses React's server renderer without React hydration. Rust can use optional Maud. Both escape ordinary text interpolation and can send complete HTML with no application JavaScript or WASM.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · formatter returns data and headers</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript HTML formatter"><code>import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+
+const htmlDetail = defineRoute(
+  detailDef,
+  async ({ slug }) =&gt; ({ slug, name: "Daiquiri" }),
+  (data) =&gt; ({
+    data: renderToString(
+      createElement("main", null,
+        createElement("h1", null, data.name)),
+    ),
+    headers: new Headers({
+      "Content-Type": "text/html; charset=utf-8",
+    }),
+    status: 200,
+  }),
+);</code></pre>
+            </div>
+            <div class="pane rust"><h3>Rust · formatted binding uses deferred values</h3>
+<pre tabindex="0" role="region" aria-label="Rust HTML formatter"><code>use switchboard::{DeferredValue, Formatted};
+use switchboard::render::html;
+
+let html_detail = define.bind_formatted(
+    detail_route()?.definition,
+    |params, _body, (), _prefix| async move {
+        Ok(DeferredValue::ready(serde_json::json!({
+            "slug": params["slug"],
+            "name": "Daiquiri",
+        })))
+    },
+    |data, (), _request, _params| async move {
+        let value = data.resolve().await?;
+        let name = value["name"].as_str()
+            .ok_or_else(HttpError::internal)?;
+        let markup = html! { main { h1 { (name) } } };
+        let mut out = Formatted::with_body(
+            markup.into_string(),
+        );
+        out.headers.insert(
+            http::header::CONTENT_TYPE,
+            http::HeaderValue::from_static(
+                "text/html; charset=utf-8"),
+        );
+        out.status = Some(200);
+        Ok(out)
+    },
+);</code></pre>
+            </div>
+          </div>
+          <div class="note"><p><strong>Typed JSON and formatted HTML use different Rust bindings.</strong> <code>bind_typed</code> has no formatter argument. <code>bind_formatted</code> takes <code>RouteDef</code> and dynamic JSON/deferred values. Here, <code>.definition</code> converts the typed declaration. Register either the JSON detail handler or this HTML alternative at the canonical path, not both.</p></div>
+          <p class="change">The Rust example enables <code>switchboard</code>'s <code>maud</code> feature and declares direct <code>maud = "0.27"</code>, <code>http = "1"</code> and <code>serde_json = "1"</code> dependencies. The <code>html!</code> macro resolves the Maud crate in the consuming application. The TypeScript renderer is app-owned, not a Switchboard export. The app's broader <code>formatOutput</code> helper chooses HTML or JSON from Accept; negotiation is an application policy. Typed clients below need JSON, so keep the JSON binding or implement that negotiation in your formatter.</p>
+        </section>
+
+        <section id="clients" aria-labelledby="clients-heading">
+          <h2 id="clients-heading">Call the JSON route with its contract</h2>
+          <p>Use the canonical route definition to build URLs, validate output and infer the result type. Empty successful responses can produce <code>undefined</code> or <code>None</code>.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · callable client</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript typed client"><code>import { createClient } from "switchboard/client";
+
+const api = createClient("http://127.0.0.1:8080");
+const cocktail = await api(
+  detailDef,
+  { slug: "daiquiri" },
+);
+// Cocktail | undefined</code></pre>
+            </div>
+            <div class="pane rust"><h3>Rust · native client</h3>
+<pre tabindex="0" role="region" aria-label="Rust native typed client"><code>use switchboard::{
+    ApiClient, CallSettings, ClientOptions,
+};
+
+let client = ApiClient::new(
+    "http://127.0.0.1:8080",
+    ClientOptions::default(),
+)?;
+let cocktail = client.call(
+    &amp;detail_route()?,
+    &amp;DetailParams { slug: "daiquiri".into() },
+    None,
+    CallSettings::default(),
+).await?;
+// Option&lt;Cocktail&gt; inside Result error handling</code></pre>
+            </div>
+          </div>
+          <p class="change">The native client needs an absolute base URL. It has no browser CORS/SameSite context. TypeScript maps HTTP, transport and malformed-JSON failures to <code>ApiError</code>. Output-schema mismatches throw <code>ZodError</code>; caller serialization and callback errors can also propagate. Rust returns typed client errors. HTTP failures, network status 0 and invalid-response status 502 remain distinguishable. A client validation failure is separate from a server-side output warning.</p>
+        </section>
+
+        <section id="streaming" aria-labelledby="streaming-heading">
+          <h2 id="streaming-heading">Keep deferred work deferred</h2>
+          <p>A formatted handler can return fields that are still pending. The formatter receives them before the whole result resolves, so an application renderer can stream an early shell and later content.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · handler return fragment</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript deferred output"><code>return {
+  slug: "daiquiri",
+  name: Promise.resolve("Daiquiri"),
+};
+// formatOutput receives the unresolved name.
+// It can return a ReadableStream as data.</code></pre>
+            </div>
+            <div class="pane rust"><h3>Rust · handler return fragment</h3>
+<pre tabindex="0" role="region" aria-label="Rust deferred output"><code>Ok(DeferredValue::object([
+    ("slug".into(), DeferredValue::ready("daiquiri")),
+    ("name".into(), DeferredValue::future(async {
+        Ok(DeferredValue::ready("Daiquiri"))
+    })),
+]))
+// A formatter can return a Body::from_stream(...)
+// through Formatted::with_body(...).</code></pre>
+            </div>
+          </div>
+          <p class="change"><strong>These are deferred-output fragments, not complete stream renderers.</strong> The HTML examples above resolve everything before sending. A real streaming formatter must retain individual fields and construct the stream. Ordinary JSON awaits the full result. Background output validation warns on mismatches; a late failure cannot replace headers already sent.</p>
+          <p class="change">Rust futures own <code>Send + 'static</code> values. Retain a definer owner for validation work. On shutdown, stop the server, then await <code>define.drain_background()</code> to finish or <code>define.cleanup_background()</code> to abort and join pending validation.</p>
+        </section>
+
+        <section id="hosting" aria-labelledby="hosting-heading">
+          <h2 id="hosting-heading">Choose a host separately from the routes</h2>
+          <p>The nearby app deploys to Cloudflare Workers. Its fetch adapter calls <code>router.handleRequest(request)</code>. Bun is its tooling runtime. The following alternative hosts use Bun's server and the Rust native server.</p>
+          <div class="pair">
+            <div class="pane ts"><h3>TypeScript · Bun hosting alternative</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript Bun server"><code>import { serveHotBuns } from "switchboard/server";
+
+const reload = await serveHotBuns(
+  { port: 8080 },
+  router,
+);
+// During shutdown:
+reload.stop();</code></pre>
+              <p class="caption">This replaces the Workers adapter; it is not Workers-compatible hosting.</p>
+            </div>
+            <div class="pane rust"><h3>Rust · owned native server</h3>
+<pre tabindex="0" role="region" aria-label="Rust native server"><code>use std::sync::Arc;
+use switchboard::server::{serve, ServerConfig};
+
+let mut server = serve(
+    ServerConfig {
+        hostname: "127.0.0.1".into(),
+        port: Some(8080),
+        ..Default::default()
+    },
+    Arc::new(router),
+    Default::default(),
+).await?;
+
+// Await the application's shutdown signal here.
+server.stop().await?;
+define.drain_background().await?;</code></pre>
+              <p class="caption">The native product runs without Bun, Node or an embedded JavaScript engine.</p>
+            </div>
+          </div>
+          <p class="change">Rust code changes require rebuilding/restarting the executable. <code>ServerHandle::reload()</code> signals browsers; it is not Bun's module HMR. The native server also supports TLS and WebSocket upgrades. Set request-body, upload and concurrency policies for your application.</p>
+        </section>
+
+        <section id="browser" aria-labelledby="browser-heading">
+          <h2 id="browser-heading">Add browser behavior only when you need it</h2>
+          <p>Ordinary links, ingredient forms and server-rendered pages work without a client library, WASM or hydration. The JavaScript-free baseline is shared by both approaches.</p>
+          <dl class="facts">
+            <div><dt>HTML-only baseline</dt><dd>The browser follows links and submits forms. The server renders the next page. This guide itself uses only HTML and CSS.</dd></div>
+            <div><dt>TypeScript enhancement</dt><dd>Add app-owned DOM listeners or use <code>createClient</code> in browser JavaScript. React server templates do not require React hydration.</dd></div>
+            <div><dt>Rust enhancement</dt><dd>Compile optional browser code to WASM. Generated wasm-bindgen JavaScript bindings and a module bootstrap load it. Keep listeners and sockets in owned handles.</dd></div>
+          </dl>
+          <details>
+            <summary>See optional browser client declarations</summary>
+            <p>These fragments belong in the optional browser application. They are displayed as text here.</p>
+            <div class="pair">
+              <div class="pane ts"><h3>TypeScript · same-origin JSON client</h3>
+<pre tabindex="0" role="region" aria-label="TypeScript browser client"><code>import { createClient } from "switchboard/client";
+
+const api = createClient("");
+const cocktail = await api(
+  detailDef,
+  { slug: "daiquiri" },
+);</code></pre>
+              </div>
+              <div class="pane rust"><h3>Rust · optional switchboard-browser crate</h3>
+<pre tabindex="0" role="region" aria-label="Rust browser client"><code>use switchboard_browser::{
+    BrowserClient, CallSettings, ClientOptions,
+};
+
+let client = BrowserClient::new(
+    "", ClientOptions::default(),
+);
+let route = detail_route()?;
+let cocktail = client.call_route(
+    &amp;route,
+    &amp;DetailParams { slug: "daiquiri".into() },
+    None,
+    &amp;CallSettings::default(),
+).await?;</code></pre>
+              </div>
+            </div>
+            <p class="change">Browser settings are borrowed in Rust; native settings are passed by value. Put this fragment in an async function with compatible error conversion. The browser crate disables core server/client features and uses browser fetch.</p>
+          </details>
+          <p class="change">The measured Rust interactive demo downloads <strong>178,861 gzip bytes</strong> of WASM, generated bindings and bootstrap, versus <strong>66,684 gzip bytes</strong> for the comparable TypeScript client demo. Those are particular demo builds, not a mandatory per-page cost. HTML-only pages download neither. Browser startup, CPU and memory have not been measured.</p>
+        </section>
+
+        <section class="status" id="status" aria-labelledby="status-heading">
+          <h2 id="status-heading">The Rust port still has explicit acceptance limits</h2>
+          <p>This is a declaration guide for the implementation at checkpoint <code>d2cf481</code>. Compatibility policy remains unresolved for BREW handling, generated Unicode lengths, large-radix rounding and Bun's string-backed BOM behavior. Strict HTTP and the unfiltered radix audit remain red; fresh final review is pending.</p>
+          <p>Current evidence lives in <a href="VERIFICATION.md">Rust verification</a>. Server benchmarks there are historical pre-remediation measurements, not current performance guarantees.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+  <footer class="wrap">
+    <p><strong>Read the actual APIs.</strong> This page contains declaration fragments, not a running API or a migrated bar application. The TypeScript reference and the nearby bar app remain unchanged.</p>
+    <ul aria-label="Implementation source links">
+      <li><a href="../src/routeDef.ts">TypeScript route builders</a></li>
+      <li><a href="../src/routeHandler.ts">TypeScript handlers</a></li>
+      <li><a href="src/handler.rs">Rust handlers</a></li>
+      <li><a href="macros/README.md">Rust route macro</a></li>
+      <li><a href="browser/README.md">Optional browser crate</a></li>
+      <li><a href="README.md">Rust setup and features</a></li>
+    </ul>
+    <p>Open this file directly in a browser. No build, external assets, network service or JavaScript is needed to read the guide.</p>
+  </footer>
+</body>
+</html>

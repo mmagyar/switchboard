@@ -6,6 +6,12 @@ The implementation uses safe authored Rust (`#![forbid(unsafe_code)]`). Establis
 
 Acceptance remains blocked on explicit decisions for BREW handling, generated Unicode lengths, large-radix rounding and Bun's string-backed BOM constructor behavior. Automatic question-timeout selections granted no exceptions. The integrated remediation passes compilation, unit, feature, MSRV and browser checks; strict HTTP and the unfiltered radix audit remain red. [VERIFICATION.md](VERIFICATION.md) records the current results and separates historical measurements.
 
+## TypeScript and Rust declaration guide
+
+Open [comparison.html](comparison.html) directly in a browser for side-by-side cocktail routes, contracts, authorization, forms, server HTML, clients, streaming and hosting. The self-contained page needs no build, JavaScript, WASM or external assets. Its examples adapt the nearby What's in my bar? application without changing it.
+
+With the [browser verification dependencies](browser/README.md) and Chromium installed, run `bun rust/browser/comparison.ts` from the repository root. It verifies JavaScript-disabled navigation, disclosure and keyboard scrolling, source links, local-file opening and layouts at 320, 768, 1024 and 1440 pixels. Screenshots are written to `.tmp/comparison/`.
+
 ## Build and test
 
 From the repository root, with Rust and Bun installed:

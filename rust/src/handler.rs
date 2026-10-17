@@ -380,6 +380,22 @@ impl Background {
     }
 }
 
+struct BackgroundDrain<'a> {
+    background: &'a Background,
+    tasks: Vec<BackgroundTask>,
+}
+
+impl Drop for BackgroundDrain<'_> {
+    fn drop(&mut self) {
+        // Dropping JoinHandles detaches tasks, so cancellation must return ownership.
+        self.background
+            .tasks
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .append(&mut self.tasks);
+    }
+}
+
 impl Drop for Background {
     fn drop(&mut self) {
         for task in self
@@ -439,20 +455,28 @@ where
 
     /// Stop accepting requests before draining. A pending field can keep this future pending.
     pub async fn drain_background(&self) -> Result<(), HttpError> {
-        for result in join_all(self.background.take()).await {
-            self.background.record(result);
-        }
-        self.background.result()
+        self.finish_background(false).await
     }
 
     /// After server shutdown, cancel remaining fields and join every owned task.
     pub async fn cleanup_background(&self) -> Result<(), HttpError> {
-        let tasks = self.background.take();
-        for task in &tasks {
-            task.abort();
+        self.finish_background(true).await
+    }
+
+    async fn finish_background(&self, abort: bool) -> Result<(), HttpError> {
+        let mut drain = BackgroundDrain {
+            background: &self.background,
+            tasks: self.background.take(),
+        };
+        if abort {
+            for task in &drain.tasks {
+                task.abort();
+            }
         }
-        for result in join_all(tasks).await {
-            if !matches!(&result, Err(error) if error.is_cancelled()) {
+        while let Some(task) = drain.tasks.last_mut() {
+            let result = task.await;
+            drain.tasks.pop();
+            if !abort || !matches!(&result, Err(error) if error.is_cancelled()) {
                 self.background.record(result);
             }
         }
@@ -1952,6 +1976,25 @@ mod tests {
 
     #[tokio::test]
     async fn cleanup_cancels_and_joins_pending_fields_without_clone_drop_aborting_them() {
+        assert_pending_background_is_released("cleanup").await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_drain_retains_tasks_for_cleanup() {
+        assert_pending_background_is_released("cancelled drain then cleanup").await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_drain_retains_tasks_for_last_owner_drop() {
+        assert_pending_background_is_released("cancelled drain then drop").await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_cleanup_retains_tasks_for_joining() {
+        assert_pending_background_is_released("cancelled cleanup").await;
+    }
+
+    async fn assert_pending_background_is_released(mode: &str) {
         struct Dropped(Arc<AtomicBool>);
         impl Drop for Dropped {
             fn drop(&mut self) {
@@ -1992,7 +2035,22 @@ mod tests {
         assert!(!dropped.load(Ordering::SeqCst));
         // The handler closure also owns the shared future. Release routes before cleanup.
         drop(router);
-        definer.cleanup_background().await.unwrap();
+        if mode.starts_with("cancelled drain") {
+            assert!(
+                tokio::time::timeout(Duration::from_millis(1), definer.drain_background())
+                    .await
+                    .is_err()
+            );
+        }
+        if mode == "cancelled cleanup" {
+            assert!(definer.cleanup_background().now_or_never().is_none());
+        }
+        if mode.ends_with("drop") {
+            drop(definer);
+            tokio::task::yield_now().await;
+        } else {
+            definer.cleanup_background().await.unwrap();
+        }
         assert!(dropped.load(Ordering::SeqCst));
     }
 

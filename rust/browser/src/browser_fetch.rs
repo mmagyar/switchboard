@@ -1,4 +1,4 @@
-use crate::client::{decode_response, no_response_body};
+use crate::client::{decode_json_response, decode_response, is_json, no_response_body};
 use crate::{BrowserClient, CallSettings, ClientError, Credentials};
 use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::{JsCast, JsValue};
@@ -65,9 +65,57 @@ impl BrowserClient {
             .get("Content-Type")
             .map_err(network_error)?
             .unwrap_or_default();
+        if status < 400 && is_json(&content_type) {
+            let value = read_json(&response).await.map_err(|error| {
+                ClientError::invalid_response(format!("Response body is not valid JSON: {error}"))
+            })?;
+            return decode_json_response(value);
+        }
         let text = read_text(&response).await;
         decode_response(&prepared.method, status, &content_type, text)
     }
+}
+
+async fn read_json(response: &Response) -> Result<serde_json::Value, String> {
+    // Cloning tees the body stream and can change native syntax-error diagnostics.
+    let original = JsFuture::from(response.json().map_err(describe)?)
+        .await
+        .map_err(describe)?;
+    let text = js_sys::JSON::stringify(&original)
+        .map_err(describe)?
+        .as_string()
+        .ok_or_else(|| "Response JSON could not be serialized".to_string())?;
+    let mut value = switchboard::json::parse(&text).map_err(|error| error.to_string())?;
+    preserve_numbers(&original, &mut value)?;
+    Ok(value)
+}
+
+fn preserve_numbers(original: &JsValue, value: &mut serde_json::Value) -> Result<(), String> {
+    if let Some(number) = original.as_f64() {
+        if !number.is_finite() {
+            return Err("Response JSON contains a non-finite number".into());
+        }
+        // JSON.stringify erases negative zero; keep it observable in unchecked results.
+        if number == 0.0 && number.is_sign_negative() {
+            *value = serde_json::Value::from(number);
+        }
+    }
+    match value {
+        serde_json::Value::Array(values) => {
+            for (original, value) in js_sys::Array::from(original).iter().zip(values) {
+                preserve_numbers(&original, value)?;
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                let original =
+                    js_sys::Reflect::get(original, &JsValue::from_str(key)).map_err(describe)?;
+                preserve_numbers(&original, value)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 async fn read_text(response: &Response) -> Result<String, String> {

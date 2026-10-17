@@ -42,7 +42,7 @@ impl ClientError {
     }
 
     #[cfg(any(target_arch = "wasm32", test))]
-    fn invalid_response(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid_response(message: impl Into<String>) -> Self {
         Self {
             status: INVALID_RESPONSE_STATUS,
             kind: ClientErrorKind::InvalidResponse,
@@ -215,11 +215,10 @@ pub(crate) fn decode_response<O: serde::de::DeserializeOwned>(
         }
     })?;
     if is_json(content_type) {
-        serde_json::from_str(&text).map(Some).map_err(|error| {
-            ClientError::invalid_response(format!(
-                "Response body is not valid JSON for the requested Rust type: {error}"
-            ))
-        })
+        let value = switchboard::json::parse(&text).map_err(|error| {
+            ClientError::invalid_response(format!("Response body is not valid JSON: {error}"))
+        })?;
+        decode_json_response(value)
     } else if text.is_empty() {
         Ok(None)
     } else {
@@ -231,6 +230,17 @@ pub(crate) fn decode_response<O: serde::de::DeserializeOwned>(
                 ))
             })
     }
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn decode_json_response<O: serde::de::DeserializeOwned>(
+    value: serde_json::Value,
+) -> Result<Option<O>, ClientError> {
+    serde_json::from_value(value).map(Some).map_err(|error| {
+        ClientError::invalid_response(format!(
+            "Response body is not valid JSON for the requested Rust type: {error}"
+        ))
+    })
 }
 
 #[cfg(test)]

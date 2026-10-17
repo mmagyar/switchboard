@@ -596,14 +596,18 @@ where
                     let binding = binding.clone();
                     async move {
                         definer.background.reap();
-                        let context = match RequestContext::from_request(&request) {
+                        let mut context = match RequestContext::from_request(&request) {
                             Ok(context) => context,
                             Err(error) => return response(error.status, "", error.message),
                         };
                         let mut user = None;
-                        let result = AssertUnwindSafe(
-                            definer.run(request, &context, &mut user, &binding, prefix),
-                        )
+                        let result = AssertUnwindSafe(definer.run(
+                            request,
+                            &mut context,
+                            &mut user,
+                            &binding,
+                            prefix,
+                        ))
                         .catch_unwind()
                         .await
                         .unwrap_or_else(|panic| Err(panic_error(panic)));
@@ -621,7 +625,7 @@ where
     async fn run(
         &self,
         request: Request,
-        context: &RequestContext,
+        context: &mut RequestContext,
         user: &mut Option<User>,
         binding: &HandlerBinding<User, Permission>,
         prefix: Option<String>,
@@ -653,10 +657,9 @@ where
                     .await;
             }
         };
-        let mut handler_context = context.clone();
         let body = if route.method.has_body() {
             let schema = route.body.as_ref().unwrap_or(&Schema::Unknown);
-            match parse_body(request, &mut handler_context, schema).await? {
+            match parse_body(request, context, schema).await? {
                 ParsedBody::Valid(body) => body,
                 ParsedBody::RawError(status, message) => return Ok(response(status, "", message)),
                 ParsedBody::Invalid(error) => {
@@ -678,14 +681,14 @@ where
             body,
             authenticated.clone(),
             prefix,
-            handler_context.clone(),
+            context.clone(),
         )
         .await?
         .unfold()
         .await?;
         if let Some(formatter) = &binding.formatter {
             self.validate_formatted(&value, &route.output, route.method, context);
-            let formatted = formatter(value, authenticated, handler_context, params).await?;
+            let formatted = formatter(value, authenticated, context.clone(), params).await?;
             let status = formatted.status.unwrap_or(if formatted.redirect {
                 303
             } else {
@@ -729,7 +732,13 @@ where
         context: &RequestContext,
     ) {
         let mut checks: Vec<BoxFuture<'static, Result<(), HttpError>>> = Vec::new();
-        if let (Schema::Object(shape), Some(fields)) = (schema, value.fields()) {
+        let mut schema = schema;
+        while let Schema::Refinement(inner, _) = schema {
+            schema = inner;
+        }
+        if let (Schema::Object(shape) | Schema::OpenObject(shape, _), Some(fields)) =
+            (schema, value.fields())
+        {
             for (key, field) in fields {
                 let Some(schema) = shape.get(&key).cloned() else {
                     continue;
@@ -962,6 +971,19 @@ enum ParsedBody {
     RawError(u16, String),
 }
 
+fn body_read_error(error: impl std::error::Error + 'static) -> HttpError {
+    let mut cause: &(dyn std::error::Error + 'static) = &error;
+    loop {
+        if cause.is::<http_body_util::LengthLimitError>() {
+            return HttpError::new(413, "Payload Too Large");
+        }
+        match cause.source() {
+            Some(source) => cause = source,
+            None => return HttpError::unexpected(error.to_string()),
+        }
+    }
+}
+
 async fn parse_body(
     request: Request,
     context: &mut RequestContext,
@@ -987,18 +1009,11 @@ async fn parse_body(
                 .map_err(|error| HttpError::unexpected(error.to_string()))?;
             let mut multipart =
                 multer::Multipart::new(request.into_body().into_data_stream(), boundary);
-            while let Some(field) = multipart
-                .next_field()
-                .await
-                .map_err(|error| HttpError::unexpected(error.to_string()))?
-            {
+            while let Some(field) = multipart.next_field().await.map_err(body_read_error)? {
                 let name = field.name().unwrap_or_default().to_owned();
                 let value = if let Some(filename) = field.file_name().map(str::to_owned) {
                     let content_type = field.content_type().map(ToString::to_string);
-                    let data = field
-                        .bytes()
-                        .await
-                        .map_err(|error| HttpError::unexpected(error.to_string()))?;
+                    let data = field.bytes().await.map_err(body_read_error)?;
                     context.uploads.push(UploadedFile {
                         field_name: name.clone(),
                         filename,
@@ -1007,19 +1022,14 @@ async fn parse_body(
                     });
                     Input::Blob
                 } else {
-                    Input::Scalar(Value::String(
-                        field
-                            .text()
-                            .await
-                            .map_err(|error| HttpError::unexpected(error.to_string()))?,
-                    ))
+                    Input::Scalar(Value::String(field.text().await.map_err(body_read_error)?))
                 };
                 append_form(&mut fields, name, value);
             }
         } else if content_type.starts_with("application/x-www-form-urlencoded") {
             let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
                 .await
-                .map_err(|error| HttpError::unexpected(error.to_string()))?;
+                .map_err(body_read_error)?;
             for (key, value) in url::form_urlencoded::parse(&bytes) {
                 append_form(
                     &mut fields,
@@ -1041,8 +1051,8 @@ async fn parse_body(
     }
     let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
         .await
-        .map_err(|error| HttpError::unexpected(error.to_string()))?;
-    let text = String::from_utf8_lossy(&bytes);
+        .map_err(body_read_error)?;
+    let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes));
     let value = if text.trim().is_empty() {
         None
     } else {
@@ -2339,6 +2349,290 @@ mod tests {
                 .as_ref(),
             &[0, 255, 1]
         );
+    }
+
+    #[tokio::test]
+    async fn request_json_decoding_strips_one_utf8_bom() {
+        let registered = definer().bind(
+            route(
+                Method::Post,
+                Some(object([("name", Schema::String)])),
+                Schema::Unknown,
+            ),
+            echo,
+        );
+        let router = router(registered);
+        let response = router
+            .handle_request(request(
+                Method::Post,
+                "/items/1",
+                Some("application/json"),
+                "\u{feff}{\"name\":\"Joe\"}",
+            ))
+            .await;
+        assert_eq!(response.status(), 201);
+        assert_eq!(json_body(response).await["body"], json!({"name":"Joe"}));
+        let response = router
+            .handle_request(request(
+                Method::Post,
+                "/items/1",
+                Some("application/json"),
+                "\u{feff}\u{feff}{}",
+            ))
+            .await;
+        assert_eq!(response.status(), 400);
+        assert_eq!(text(response).await, "Body is not valid JSON");
+    }
+
+    #[tokio::test]
+    async fn bom_only_request_is_an_absent_optional_body() {
+        let registered = definer().bind(
+            route(
+                Method::Post,
+                Some(Schema::Optional(Box::new(Schema::String))),
+                Schema::Unknown,
+            ),
+            |_, body, _, _| async move {
+                assert_eq!(body, None);
+                Ok(DeferredValue::ready("absent"))
+            },
+        );
+        let response = router(registered)
+            .handle_request(request(
+                Method::Post,
+                "/items/1",
+                Some("application/json"),
+                "\u{feff}",
+            ))
+            .await;
+        assert_eq!(response.status(), 201);
+        assert_eq!(json_body(response).await, json!("absent"));
+    }
+
+    #[tokio::test]
+    async fn formatted_open_object_fields_warn_without_blocking() {
+        let Schema::Object(shape) =
+            object([("ready", Schema::String), ("deferred", Schema::String)])
+        else {
+            unreachable!()
+        };
+        assert_formatted_shape_warnings(Schema::OpenObject(shape, Box::new(Schema::Unknown))).await;
+    }
+
+    #[tokio::test]
+    async fn formatted_refined_object_fields_warn_without_blocking() {
+        assert_formatted_shape_warnings(
+            object([("ready", Schema::String), ("deferred", Schema::String)]).refine(|_| Ok(())),
+        )
+        .await;
+    }
+
+    async fn assert_formatted_shape_warnings(schema: Schema) {
+        let warnings = Arc::new(Mutex::new(Vec::new()));
+        let capture = warnings.clone();
+        let definer = definer().with_options(HandlerOptions {
+            output_warning: Some(Arc::new(move |warning| {
+                capture.lock().unwrap().push(warning)
+            })),
+            ..HandlerOptions::default()
+        });
+        let (release, gated) = oneshot::channel();
+        let value = DeferredValue::object([
+            ("ready".into(), DeferredValue::ready(123)),
+            (
+                "deferred".into(),
+                DeferredValue::future(async move {
+                    gated.await.unwrap();
+                    Ok(DeferredValue::ready(456))
+                }),
+            ),
+        ]);
+        let registered = definer.bind_formatted(
+            route(Method::Get, None, schema),
+            move |_, _, _, _| {
+                let value = value.clone();
+                async move { Ok(value) }
+            },
+            |_, _, _, _| async { Ok(Formatted::with_body("streamed")) },
+        );
+        let response = tokio::time::timeout(
+            Duration::from_secs(1),
+            router(registered).handle_request(request(Method::Get, "/items/1", None, "")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(text(response).await, "streamed");
+        assert_eq!(warnings.lock().unwrap().len(), 1);
+        release.send(()).unwrap();
+        definer.drain_background().await.unwrap();
+        let warnings = warnings.lock().unwrap();
+        assert_eq!(warnings.len(), 2);
+        for (warning, (key, value)) in warnings.iter().zip([("ready", 123), ("deferred", 456)]) {
+            assert_eq!(warning.url, format!("http://localhost/items/1#{key}"));
+            assert_eq!(warning.data, json!(value));
+            assert_eq!(
+                warning.error.issues,
+                vec![
+                    json!({"expected":"string","code":"invalid_type","path":[],"message":"Invalid input: expected string, received number"})
+                ]
+            );
+        }
+    }
+
+    fn upload_error_definer() -> HandlerDefiner<String, String> {
+        definer().with_options(HandlerOptions {
+            error_html_formatter: Some(Arc::new(|_, _, context, user| {
+                async move {
+                    assert_eq!(user.as_deref(), Some("reader"));
+                    Ok(context
+                        .uploads
+                        .iter()
+                        .map(|file| file.filename.as_str())
+                        .collect::<Vec<_>>()
+                        .join(","))
+                }
+                .boxed()
+            })),
+            ..HandlerOptions::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn multipart_validation_errors_retain_uploads_in_html_context() {
+        let registered = upload_error_definer().bind(
+            route(
+                Method::Post,
+                Some(object([("title", Schema::Number)])),
+                Schema::Unknown,
+            ),
+            |_, _, _, _| async { panic!("invalid body must not reach handler") },
+        );
+        let response = router(registered)
+            .handle_request(accepting(upload_request(), "text/html"))
+            .await;
+        assert_eq!(response.status(), 400);
+        assert_eq!(text(response).await, "a.bin,b.txt");
+    }
+
+    #[tokio::test]
+    async fn multipart_handler_errors_retain_uploads_in_html_context() {
+        let registered = upload_error_definer().bind_with_context(
+            route(Method::Post, None, Schema::Unknown),
+            |_, _, _, _, context| async move {
+                assert_eq!(context.uploads.len(), 2);
+                Err(HttpError::new(422, "handler error"))
+            },
+        );
+        let response = router(registered)
+            .handle_request(accepting(upload_request(), "text/html"))
+            .await;
+        assert_eq!(response.status(), 422);
+        assert_eq!(text(response).await, "a.bin,b.txt");
+    }
+
+    #[tokio::test]
+    async fn multipart_formatter_errors_retain_uploads_in_html_context() {
+        let registered = upload_error_definer().bind_formatted(
+            route(Method::Post, None, Schema::Unknown),
+            echo,
+            |_, _, context, _| async move {
+                assert_eq!(context.uploads.len(), 2);
+                Err(HttpError::new(422, "formatter error"))
+            },
+        );
+        let response = router(registered)
+            .handle_request(accepting(upload_request(), "text/html"))
+            .await;
+        assert_eq!(response.status(), 422);
+        assert_eq!(text(response).await, "a.bin,b.txt");
+    }
+
+    #[tokio::test]
+    async fn multipart_deferred_errors_retain_uploads_in_html_context() {
+        let registered = upload_error_definer().bind(
+            route(Method::Post, None, Schema::Unknown),
+            |_, _, _, _| async {
+                Ok(DeferredValue::object([(
+                    "nested".into(),
+                    DeferredValue::future(async { Err(HttpError::new(422, "deferred error")) }),
+                )]))
+            },
+        );
+        let response = router(registered)
+            .handle_request(accepting(upload_request(), "text/html"))
+            .await;
+        assert_eq!(response.status(), 422);
+        assert_eq!(text(response).await, "a.bin,b.txt");
+    }
+
+    async fn assert_body_limit_response(content_type: &str, chunks: Vec<Bytes>, limit: usize) {
+        let registered = definer().bind(
+            route(Method::Post, None, Schema::Unknown),
+            |_, _, _, _| async { panic!("limited body must not reach handler") },
+        );
+        let body = Body::from_stream(stream::iter(chunks.into_iter().map(Ok::<_, Infallible>)));
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("http://localhost/items/1")
+            .header("content-type", content_type)
+            .header("accept", "text/plain")
+            .body(Body::new(http_body_util::Limited::new(body, limit)))
+            .unwrap();
+        let response = router(registered).handle_request(request).await;
+        assert_eq!(response.status(), 413);
+        assert_eq!(text(response).await, "Payload Too Large");
+    }
+
+    #[tokio::test]
+    async fn json_body_length_limit_returns_413() {
+        assert_body_limit_response("application/json", vec![Bytes::from_static(b"{}")], 1).await;
+    }
+
+    #[tokio::test]
+    async fn urlencoded_body_length_limit_returns_413() {
+        assert_body_limit_response(
+            "application/x-www-form-urlencoded",
+            vec![Bytes::from_static(b"name=Joe")],
+            1,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn multipart_headers_body_length_limit_returns_413() {
+        assert_body_limit_response(
+            "multipart/form-data; boundary=upload",
+            vec![Bytes::from(multipart_files())],
+            1,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn multipart_file_body_length_limit_returns_413() {
+        let header = Bytes::from_static(b"--upload\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\n\r\n");
+        let limit = header.len();
+        assert_body_limit_response(
+            "multipart/form-data; boundary=upload",
+            vec![header, Bytes::from_static(b"contents\r\n--upload--\r\n")],
+            limit,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn multipart_text_body_length_limit_returns_413() {
+        let header = Bytes::from_static(
+            b"--upload\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n",
+        );
+        let limit = header.len();
+        assert_body_limit_response(
+            "multipart/form-data; boundary=upload",
+            vec![header, Bytes::from_static(b"Joe\r\n--upload--\r\n")],
+            limit,
+        )
+        .await;
     }
 
     #[tokio::test]

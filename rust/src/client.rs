@@ -316,7 +316,7 @@ impl ApiClient {
             })
         })?;
         if json {
-            serde_json::from_str(&text).map(Some).map_err(|error| {
+            crate::json::parse(&text).map(Some).map_err(|error| {
                 ClientError::Api(ApiError::caused(
                     INVALID_RESPONSE_STATUS,
                     ApiErrorKind::InvalidResponse,
@@ -500,6 +500,94 @@ mod tests {
             Some("application/json")
         );
         assert!(!requests[0].headers.contains_key("authorization"));
+    }
+
+    #[tokio::test]
+    async fn client_api_call_unchecked_normalizes_nested_json_numbers() {
+        let (url, handle) = peer(vec![response(
+            200,
+            "application/json",
+            r#"{"10":9007199254740993,"2":[-9007199254740993,{"n":9007199254740995}],"fraction":1.25,"zero":-0}"#,
+        )])
+        .await;
+        let value = client(&url)
+            .call_unchecked(
+                &route::<Value, Value>(Method::Get),
+                &Empty {},
+                None,
+                CallSettings::default(),
+            )
+            .await
+            .expect("JSON response")
+            .expect("nonempty response");
+        assert_eq!(value["10"], json!(9_007_199_254_740_992_u64));
+        assert_eq!(value["2"][0], json!(-9_007_199_254_740_992_i64));
+        assert_eq!(value["2"][1]["n"], json!(9_007_199_254_740_996_u64));
+        assert_eq!(value["fraction"], json!(1.25));
+        assert!(value["zero"].as_f64().expect("number").is_sign_negative());
+        assert_eq!(
+            value
+                .as_object()
+                .expect("object")
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["2", "10", "fraction", "zero"]
+        );
+        handle.await.expect("peer completes");
+    }
+
+    #[tokio::test]
+    async fn client_api_call_output_schema_observes_rounded_json_numbers() {
+        let (url, handle) = peer(vec![response(200, "application/json", "9007199254740993")]).await;
+        let mut route = route::<Value, Value>(Method::Get);
+        route.definition.output = Schema::Number.refine(|value| {
+            assert_eq!(value, Some(&json!(9_007_199_254_740_992_u64)));
+            Ok(())
+        });
+        assert_eq!(
+            client(&url)
+                .call(&route, &Empty {}, None, CallSettings::default())
+                .await
+                .expect("schema sees the rounded value"),
+            Some(json!(9_007_199_254_740_992_u64))
+        );
+        handle.await.expect("peer completes");
+    }
+
+    #[tokio::test]
+    async fn client_api_call_typed_integral_output_decodes_after_json_rounding() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+        struct Numbers {
+            positive: u64,
+            negative: i64,
+            integral_float: i32,
+            nested: Vec<u64>,
+        }
+        let (url, handle) = peer(vec![response(
+            200,
+            "application/json",
+            r#"{"positive":9007199254740993,"negative":-9007199254740993,"integral_float":1.0,"nested":[9007199254740995]}"#,
+        )])
+        .await;
+        assert_eq!(
+            client(&url)
+                .call(
+                    &route::<Value, Numbers>(Method::Get),
+                    &Empty {},
+                    None,
+                    CallSettings::default(),
+                )
+                .await
+                .expect("typed integral output"),
+            Some(Numbers {
+                positive: 9_007_199_254_740_992,
+                negative: -9_007_199_254_740_992,
+                integral_float: 1,
+                nested: vec![9_007_199_254_740_996],
+            })
+        );
+        handle.await.expect("peer completes");
     }
 
     #[tokio::test]

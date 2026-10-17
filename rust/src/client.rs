@@ -382,7 +382,20 @@ mod tests {
         )
     }
 
-    async fn peer(responses: Vec<String>) -> (String, JoinHandle<Vec<CapturedRequest>>) {
+    fn gzip_response(status: u16, body: &[u8]) -> Vec<u8> {
+        let mut response = format!(
+            "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    async fn peer(
+        responses: Vec<impl Into<Vec<u8>>>,
+    ) -> (String, JoinHandle<Vec<CapturedRequest>>) {
+        let responses: Vec<Vec<u8>> = responses.into_iter().map(Into::into).collect();
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind peer");
         let address = format!("http://{}", listener.local_addr().expect("local address"));
         let handle = tokio::spawn(async move {
@@ -438,10 +451,7 @@ mod tests {
                     headers,
                     body: String::from_utf8(bytes[header_end..].to_vec()).expect("UTF-8 body"),
                 });
-                stream
-                    .write_all(response.as_bytes())
-                    .await
-                    .expect("write response");
+                stream.write_all(&response).await.expect("write response");
             }
             requests
         });
@@ -588,6 +598,113 @@ mod tests {
             })
         );
         handle.await.expect("peer completes");
+    }
+
+    #[tokio::test]
+    async fn client_api_call_gzip_success_decodes_on_both_credential_transports() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+        struct RoundedOutput {
+            value: u64,
+        }
+        // gzip.compress(b'{"value":9007199254740993}', mtime=0)
+        let compressed = [
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 171, 86, 42, 75, 204, 41, 77, 85, 178, 178, 52, 48,
+            48, 55, 180, 180, 52, 50, 53, 49, 55, 49, 176, 180, 52, 174, 5, 0, 166, 65, 67, 250,
+            26, 0, 0, 0,
+        ];
+        for credentials in [false, true] {
+            let (url, handle) = peer(vec![gzip_response(200, &compressed); 2]).await;
+            let client = ApiClient::new(
+                &url,
+                ClientOptions {
+                    with_credentials: !credentials,
+                    ..ClientOptions::default()
+                },
+            )
+            .expect("client");
+            let settings = CallSettings {
+                with_credentials: Some(credentials),
+                ..CallSettings::default()
+            };
+            let route = route::<Value, RoundedOutput>(Method::Get);
+            assert_eq!(
+                client
+                    .call_unchecked(&route, &Empty {}, None, settings.clone())
+                    .await
+                    .expect("gzip JSON"),
+                Some(json!({"value":9_007_199_254_740_992_u64}))
+            );
+            assert_eq!(
+                client
+                    .call(&route, &Empty {}, None, settings)
+                    .await
+                    .expect("typed gzip JSON"),
+                Some(RoundedOutput {
+                    value: 9_007_199_254_740_992
+                })
+            );
+            handle.await.expect("peer completes");
+        }
+    }
+
+    #[tokio::test]
+    async fn client_api_call_gzip_errors_preserve_auth_callbacks_status_and_decoded_detail() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        // gzip.compress(b'"login required"', mtime=0), gzip.compress(b'denied', mtime=0)
+        let login = [
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 83, 202, 201, 79, 207, 204, 83, 40, 74, 45, 44, 205,
+            44, 74, 77, 81, 2, 0, 36, 111, 117, 178, 16, 0, 0, 0,
+        ];
+        let denied = [
+            31, 139, 8, 0, 0, 0, 0, 0, 2, 3, 75, 73, 205, 203, 76, 77, 1, 0, 238, 94, 223, 189, 6,
+            0, 0, 0,
+        ];
+        for credentials in [false, true] {
+            let (url, handle) = peer(vec![
+                gzip_response(401, &login),
+                gzip_response(403, &denied),
+            ])
+            .await;
+            let unauthorized = Arc::new(AtomicUsize::new(0));
+            let forbidden = Arc::new(AtomicUsize::new(0));
+            let client = ApiClient::new(
+                &url,
+                ClientOptions {
+                    with_credentials: credentials,
+                    on_unauthorized: Some({
+                        let count = unauthorized.clone();
+                        Arc::new(move || {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                    }),
+                    on_forbidden: Some({
+                        let count = forbidden.clone();
+                        Arc::new(move || {
+                            count.fetch_add(1, Ordering::SeqCst);
+                            Ok(())
+                        })
+                    }),
+                },
+            )
+            .expect("client");
+            for (status, detail, a, b) in [(401, "\"login required\"", 1, 0), (403, "denied", 1, 1)]
+            {
+                let error = client
+                    .call(
+                        &route::<Value, Value>(Method::Get),
+                        &Empty {},
+                        None,
+                        CallSettings::default(),
+                    )
+                    .await
+                    .expect_err("HTTP error");
+                assert_eq!(api(error, status, ApiErrorKind::Http).message, detail);
+                assert_eq!(unauthorized.load(Ordering::SeqCst), a);
+                assert_eq!(forbidden.load(Ordering::SeqCst), b);
+            }
+            handle.await.expect("peer completes");
+        }
     }
 
     #[tokio::test]
@@ -1025,7 +1142,12 @@ mod tests {
 
     #[tokio::test]
     async fn client_api_call_callback_failure_precedes_body_read_and_retains_original_error() {
-        for status in [401, 403] {
+        for (status, encoding) in [
+            (401, ""),
+            (403, ""),
+            (401, "Content-Encoding: gzip\r\n"),
+            (403, "Content-Encoding: gzip\r\n"),
+        ] {
             let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind peer");
             let url = format!("http://{}", listener.local_addr().expect("local address"));
             let notified = Arc::new(tokio::sync::Notify::new());
@@ -1036,7 +1158,7 @@ mod tests {
                 assert_ne!(stream.read(&mut buffer).await.expect("request"), 0);
                 stream
                     .write_all(
-                        format!("HTTP/1.1 {status} Test\r\nContent-Length: 1000\r\n\r\n")
+                        format!("HTTP/1.1 {status} Test\r\n{encoding}Content-Length: 1000\r\n\r\n")
                             .as_bytes(),
                     )
                     .await

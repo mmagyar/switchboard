@@ -200,10 +200,30 @@ impl Drop for ServerHandle {
     }
 }
 
+/// Hosts HTTP/TLS with automatic hot-reload and log WebSocket upgrades.
 pub async fn serve(
     config: ServerConfig,
     router: Arc<Router>,
     options: ServerOptions,
+) -> Result<ServerHandle, ServerError> {
+    serve_with_websockets(config, router, options, true).await
+}
+
+/// Hosts HTTP/TLS without automatic WebSocket upgrades.
+/// Upgrade requests pass through the router and normal access logging.
+pub async fn serve_http_only(
+    config: ServerConfig,
+    router: Arc<Router>,
+    options: ServerOptions,
+) -> Result<ServerHandle, ServerError> {
+    serve_with_websockets(config, router, options, false).await
+}
+
+async fn serve_with_websockets(
+    config: ServerConfig,
+    router: Arc<Router>,
+    options: ServerOptions,
+    websockets: bool,
 ) -> Result<ServerHandle, ServerError> {
     let tls = config.https.as_ref().map(tls_acceptor).transpose()?;
     let (messages, _) = broadcast::channel(64);
@@ -243,6 +263,7 @@ pub async fn serve(
         messages: messages.clone(),
         tls: tls.is_some(),
         max_request_body_size: config.max_request_body_size,
+        websockets,
     });
     let task = tokio::spawn(async move {
         let mut connections = JoinSet::new();
@@ -321,6 +342,7 @@ struct State {
     messages: broadcast::Sender<String>,
     tls: bool,
     max_request_body_size: usize,
+    websockets: bool,
 }
 
 async fn connection<T>(
@@ -348,7 +370,7 @@ async fn connection<T>(
                 Ok(()) => {
                     if let Some(port) = redirect {
                         redirect_response(&request, port)
-                    } else if websocket_key(&request).is_some() {
+                    } else if state.websockets && websocket_key(&request).is_some() {
                         let key = websocket_key(&request).expect("validated upgrade");
                         let mut result = response(101, "", Body::empty());
                         result.headers_mut().insert(
@@ -920,6 +942,88 @@ mod tests {
         let empty = http(handle.local_addr(), "/empty", "localhost").await;
         assert!(!empty.contains("content-type:"), "{empty}");
         handle.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn http_only_upgrade_dispatches_and_logs_missing_and_existing_routes() {
+        let (tx, mut logs) = mpsc::unbounded_channel();
+        let options = ServerOptions {
+            access_log: Some(Arc::new(move |_, context, response| {
+                tx.send((context.clone(), response.status())).unwrap();
+            })),
+            read_logs: None,
+            watch_logs: None,
+        };
+        let mut handle = serve_http_only(config(), router(), options).await.unwrap();
+        for (path, status, body) in [
+            ("/__missing__", 404, "Not found - Route not defined"),
+            ("/hello", 200, "http://example.test/hello preserved"),
+        ] {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut stream = TcpStream::connect(handle.local_addr()).await.unwrap();
+            stream.write_all(format!(
+                "GET {path} HTTP/1.1\r\nHost: example.test\r\nX-Test: preserved\r\nConnection: Upgrade, close\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            ).as_bytes()).await.unwrap();
+            let mut stream = BufReader::new(stream);
+            let mut headers = String::new();
+            timeout(BUDGET, async {
+                loop {
+                    let mut line = String::new();
+                    assert_ne!(stream.read_line(&mut line).await.unwrap(), 0);
+                    headers.push_str(&line);
+                    if line == "\r\n" {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert!(
+                headers.starts_with(&format!("HTTP/1.1 {status} ")),
+                "{headers}"
+            );
+            assert!(
+                !headers
+                    .to_ascii_lowercase()
+                    .contains("sec-websocket-accept:")
+            );
+            let mut result = String::new();
+            timeout(BUDGET, stream.read_to_string(&mut result))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(result, body);
+            let (context, logged_status) = timeout(BUDGET, logs.recv()).await.unwrap().unwrap();
+            assert_eq!(context.method, http::Method::GET);
+            assert_eq!(context.url.as_str(), format!("http://example.test{path}"));
+            assert_eq!(context.headers["upgrade"], "websocket");
+            assert_eq!(logged_status, status);
+        }
+        timeout(BUDGET, handle.stop()).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn default_serve_still_upgrades_missing_paths_without_log_delivery() {
+        let options = ServerOptions {
+            access_log: None,
+            read_logs: None,
+            watch_logs: None,
+        };
+        let mut handle = serve(config(), router(), options).await.unwrap();
+        let (mut ws, handshake) = timeout(
+            BUDGET,
+            connect_async(format!("ws://{}/__missing__", handle.local_addr())),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(handshake.status(), 101);
+        handle.reload();
+        assert_eq!(
+            timeout(BUDGET, ws.next()).await.unwrap().unwrap().unwrap(),
+            Message::Text("RELOAD".into())
+        );
+        timeout(BUDGET, handle.stop()).await.unwrap().unwrap();
     }
 
     #[tokio::test]

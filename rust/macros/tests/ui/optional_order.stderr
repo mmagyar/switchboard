@@ -1,0 +1,11 @@
+error: cannot have a mandatory parameter or static segment after an optional segment
+ --> tests/ui/optional_order.rs:4:25
+  |
+4 |     let _ = route!(get, "/:id?/:name", (), ());
+  |                         ^^^^^^^^^^^^^
+
+error: cannot have a mandatory parameter or static segment after an optional segment
+ --> tests/ui/optional_order.rs:5:25
+  |
+5 |     let _ = route!(get, "/:id?/fixed", (), ());
+  |                         ^^^^^^^^^^^^^

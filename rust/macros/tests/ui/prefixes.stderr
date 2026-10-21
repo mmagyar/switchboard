@@ -1,0 +1,11 @@
+error: prefix must not start with a slash
+ --> tests/ui/prefixes.rs:4:50
+  |
+4 |     let _ = route!(get, "/", (), (), prefixes = ["/hu"]);
+  |                                                  ^^^^^
+
+error: prefix must not contain path params
+ --> tests/ui/prefixes.rs:5:50
+  |
+5 |     let _ = route!(get, "/", (), (), prefixes = ["hu/:locale"]);
+  |                                                  ^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+/target/
+/pkg/
+/examples/demo/target/
+/examples/demo/static/generated/
+/node_modules/

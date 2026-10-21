@@ -1,0 +1,9 @@
+[package]
+name = "switchboard-renamed-consumer-check"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+sb = { package = "switchboard", path = "..", default-features = false }

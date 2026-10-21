@@ -1,0 +1,19 @@
+[package]
+name = "switchboard-macros"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Compile-time route path validation and typed params for Switchboard"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+proc-macro-crate = "3"
+
+[dev-dependencies]
+trybuild = "1"

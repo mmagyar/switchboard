@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "integration": "bun integration.ts"
+  },
+  "devDependencies": {
+    "playwright-core": "1.60.0"
+  }
+}

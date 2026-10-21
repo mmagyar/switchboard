@@ -1,0 +1,33 @@
+[package]
+name = "switchboard-browser"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Optional Rust/WASM browser transport and lifecycle helpers for Switchboard"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+switchboard = { path = "..", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "console", "Event", "EventTarget", "Headers", "Location", "MessageEvent",
+  "RequestCredentials", "RequestInit", "Response", "WebSocket", "Window",
+] }
+
+[dev-dependencies]
+schemars = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = "debuginfo"
